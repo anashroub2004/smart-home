@@ -103,6 +103,7 @@ class House:
         self.lock_at = None
         self.last = dict(state=0, summary=0, ai=0, random=0, door=0, motion=0)
         self.seen_cmd_at = {}
+        self.ai_pause = {}               # device -> until ms (set from the web app)
 
     def load_config(self, config):
         self.config = config
@@ -227,7 +228,28 @@ class House:
 
     # ------------------------------------------------ automation rules
     def paused(self, device):
-        return time.time() < self.override_until.get(device, 0)
+        """AI + comfort rules leave the device alone after manual control, or while the user paused it."""
+        return time.time() < self.override_until.get(device, 0) or self.user_paused(device)
+
+    def user_paused(self, device):
+        """Explicit "Pause automation" from the device sheet (/ai_pause/{device} = until ms)."""
+        return now_ms() < int(self.ai_pause.get(device) or 0)
+
+    def sync_ai_pause(self):
+        new = self.w.get_ai_pause()
+        for dev in set(new) | set(self.ai_pause):
+            if dev not in self.dev_cfg or new.get(dev) == self.ai_pause.get(dev):
+                continue
+            name = self.dev_cfg[dev]["name"]
+            room = self.dev_room[dev]
+            if new.get(dev) and int(new[dev]) > now_ms():
+                mins = round((int(new[dev]) - now_ms()) / 60000)
+                self.w.log_event("config", f"{self.config['rooms'][room]['name']} · {name}: automation paused for {mins} min",
+                                 "web", device=dev, room=room, trigger="pause_automation", tags=["web", "pause"])
+            elif self.ai_pause.get(dev):
+                self.w.log_event("config", f"{self.config['rooms'][room]['name']} · {name}: automation resumed",
+                                 "web", device=dev, room=room, trigger="resume_automation", tags=["web", "pause"])
+        self.ai_pause = new
 
     def apply_rules(self):
         t = time.time()
@@ -244,7 +266,8 @@ class House:
                 if cfg["type"] in ("lock", "washer"):
                     continue
                 empty_for = t - self.empty_since.get(rid, t)
-                if st["v"] and empty_for > self.th["empty_room_off_min"] * 60 / self.speedup:
+                if (st["v"] and not self.user_paused(dev)
+                        and empty_for > self.th["empty_room_off_min"] * 60 / self.speedup):
                     self.set_device(dev, 0, source="rule", trigger="empty_room",
                                     tags=["rule", "energy_saving"])
                 elif (cfg["type"] == "light" and not st["v"] and s.get("occ") and not self.paused(dev)
@@ -359,6 +382,7 @@ class House:
                     self.w.log_event("config", f"Config v{cfg['version']} applied", "system", tags=["config"])
                 if t - self.last["state"] >= 5 / sp:
                     self.last["state"] = t
+                    self.sync_ai_pause()
                     self.update_sensors()
                     self.apply_rules()
                     self.write_state(self.update_power(dt if dt < 60 else 0))

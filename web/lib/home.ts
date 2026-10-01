@@ -38,6 +38,7 @@ export const PATHS = {
   events: "events",
   energyDaily: "energy_daily",
   aiSchedule: "ai_schedule",
+  aiPause: (device: string) => `ai_pause/${device}`,
   suggestions: "suggestions",
   suggestion: (id: string) => `suggestions/${id}`,
   accessLog: "access_log",
@@ -94,6 +95,8 @@ export const useHomeState = () => useValue<HomeState>(PATHS.homeState);
 export const useNodes = () => useValue<Record<string, NodeStatus>>(PATHS.nodes);
 export const useEnergyDaily = () => useValue<Record<string, EnergyDay>>(PATHS.energyDaily);
 export const useAiSchedule = () => useValue<Record<string, AiDecision>>(PATHS.aiSchedule);
+/** ms timestamp until which automation (AI + rules) leaves this device alone; null = not paused. */
+export const useAiPause = (device: string) => useValue<number>(PATHS.aiPause(device));
 
 export const useEvents = (limit = 100) => useLatest<HomeEvent>(PATHS.events, limit);
 export const useAccessLog = (limit = 30) => useLatest<AccessEntry>(PATHS.accessLog, limit);
@@ -137,6 +140,11 @@ export async function applyScene(sceneId: string, setMap: Record<string, SceneVa
 export async function answerSuggestion(id: string, s: Suggestion, accept: boolean) {
   await update(ref(fbDb(), PATHS.suggestion(id)), { response: accept ? "accept" : "dismiss" });
   if (accept) await sendCommand(s.device, s.action === "on" ? 1 : 0);
+}
+
+/** minutes = null resumes automation now. */
+export async function setAiPause(device: string, minutes: number | null) {
+  await set(ref(fbDb(), PATHS.aiPause(device)), minutes ? Date.now() + minutes * 60_000 : null);
 }
 
 export async function ackAlert(id: string) {

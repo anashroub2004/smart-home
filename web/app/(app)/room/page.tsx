@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense } from "react";
 import { ChevronLeft } from "lucide-react";
 import { DeviceTile } from "@/components/DeviceTile";
 import { EventRow } from "@/components/EventRow";
 import { RoomStats } from "@/components/RoomSection";
-import { sendCommand, useConfig, useEvents, useHomeState, useNodes } from "@/lib/home";
+import { useConfig, useEvents, useHomeState, useNodes } from "@/lib/home";
 
 // Static export can't pre-render /room/[id] for rooms added later, so the room id is a query param: /room?id=living
 export default function RoomPage() {
@@ -47,11 +47,9 @@ function Room() {
         </div>
       )}
 
-      {devices
-        .filter(([, cfg]) => cfg.type === "fan")
-        .map(([dev, cfg]) => (
-          <FanSpeed key={dev} id={dev} name={cfg.name} speed={state?.devices?.[dev]?.speed ?? 60} disabled={offline} />
-        ))}
+      {devices.length > 0 && (
+        <p className="mt-3 text-xs text-muted">Tip: long-press a tile (or right-click / ⋯) for speed, energy, automation and history.</p>
+      )}
 
       <h2 className="mt-8 mb-2 text-lg font-bold">Recent activity</h2>
       {roomEvents.length ? (
@@ -60,24 +58,5 @@ function Room() {
         <p className="text-sm text-muted">Nothing yet.</p>
       )}
     </>
-  );
-}
-
-function FanSpeed({ id, name, speed, disabled }: { id: string; name: string; speed: number; disabled: boolean }) {
-  const [val, setVal] = useState(speed);
-  return (
-    <div className="card mt-4 p-4">
-      <div className="flex justify-between text-sm">
-        <span>{name} speed</span>
-        <span className="text-muted">{val}%</span>
-      </div>
-      <input
-        type="range" min={20} max={100} step={10} value={val} disabled={disabled}
-        onChange={(e) => setVal(Number(e.target.value))}
-        onPointerUp={() => sendCommand(id, 1, val)}
-        onKeyUp={() => sendCommand(id, 1, val)}
-        className="mt-3 w-full accent-[var(--color-fan)]"
-      />
-    </div>
   );
 }

@@ -78,6 +78,9 @@ class Writer:
         return self.db.get(f"energy_daily/{day}") or {}
 
     # ------------------------------------------------------------ AI
+    def get_ai_pause(self):
+        return self.db.get("ai_pause") or {}
+
     def write_ai_schedule(self, decisions):
         self.db.put("ai_schedule", {d["device"]: {**d, "at": now_ms()} for d in decisions})
 

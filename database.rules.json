@@ -25,6 +25,14 @@
       }
     },
 
+    "ai_pause": {
+      ".read": "auth != null",
+      "$device": {
+        ".write": "auth != null",
+        ".validate": "!newData.exists() || newData.isNumber()"
+      }
+    },
+
     "suggestions": {
       ".read": "auth != null",
       "$id": {

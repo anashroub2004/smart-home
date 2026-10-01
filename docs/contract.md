@@ -3,7 +3,7 @@
 هذا الملف هو **المرجع الوحيد** لشكل البيانات بين: الـ Pi، المحاكي، تطبيق الويب، والذكاء الاصطناعي.
 أي تغيير هنا يجب أن ينعكس في: `web/lib/contract.ts` و `pi/firebase_writer.py`.
 
-القاعدة: **الويب يكتب فقط في `/commands` و`/suggestions/{id}` و`/alerts/{id}/ack` و`/config`**. كل شيء آخر يكتبه الـ Pi (أو المحاكي).
+القاعدة: **الويب يكتب فقط في `/commands` و`/ai_pause` و`/suggestions/{id}` و`/alerts/{id}/ack` و`/config`**. كل شيء آخر يكتبه الـ Pi (أو المحاكي).
 
 ## مسارات Firebase Realtime Database
 
@@ -17,6 +17,7 @@
 | `/summaries/{room}/{YYYY-MM-DD}/{HH:MM}` | Pi | ملخص كل دقيقة (حرارة/إضاءة/وجود/واط) |
 | `/energy_daily/{YYYY-MM-DD}/{device}` | Pi | Wh لكل جهاز في اليوم |
 | `/ai_schedule/{device}` | Pi (AI) | قرارات التشغيل المجدولة |
+| `/ai_pause/{device}` | الويب | رقم = إيقاف الأتمتة (AI + القواعد) لهذا الجهاز حتى هذا الوقت (ms). حذفه = استئناف |
 | `/suggestions/{id}` | Pi (AI) / الويب يرد | اقتراحات بثقة متوسطة |
 | `/access_log/{pushId}` | Pi | محاولات فتح الباب |
 | `/alerts/{pushId}` | Pi | تنبيهات حرجة |
