@@ -63,13 +63,22 @@ def ensure_owner(w):
             return json.loads(r.read())
 
     body = {"email": OWNER_EMAIL, "password": OWNER_PASSWORD, "returnSecureToken": True}
-    try:
+    uid = None
+    for attempt in range(15):          # the emulators may still be starting — wait up to ~30 s
         try:
-            uid = call("accounts:signUp", body)["localId"]
-        except urllib.error.HTTPError:  # EMAIL_EXISTS
-            uid = call("accounts:signInWithPassword", body)["localId"]
-    except Exception as e:  # auth emulator not running
-        print(f"! could not reach the Auth emulator ({e}). Login will not work.")
+            try:
+                uid = call("accounts:signUp", body)["localId"]
+            except urllib.error.HTTPError:  # EMAIL_EXISTS
+                uid = call("accounts:signInWithPassword", body)["localId"]
+            break
+        except Exception as e:  # auth emulator not reachable (yet)
+            if attempt == 0:
+                print("waiting for the Auth emulator on 127.0.0.1:9099 …")
+            last = e
+            time.sleep(2)
+    if uid is None:
+        print(f"! could not reach the Auth emulator ({last}).\n"
+              "  Login will not work. Is `firebase emulators:start` running and showing Authentication on 9099?")
         return None
     w.db.put(f"users/{uid}", {"role": "owner", "name": "Owner"})
     return uid
