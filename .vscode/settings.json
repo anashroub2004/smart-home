@@ -1,0 +1,8 @@
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[python]": { "editor.defaultFormatter": "ms-python.python" },
+  "typescript.tsdk": "web/node_modules/typescript/lib",
+  "files.associations": { "*.css": "tailwindcss" },
+  "files.exclude": { "**/__pycache__": true, "web/.next": true, "web/out": true }
+}

@@ -1,0 +1,5 @@
+# The simulator (sim_house.py, rest_db.py, firebase_writer.py) needs NOTHING — Python 3.10+ standard library only.
+#
+# On the real Raspberry Pi the services will additionally need:
+# paho-mqtt>=2.0
+# firebase-admin>=6.0

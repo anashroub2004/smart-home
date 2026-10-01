@@ -1,0 +1,34 @@
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Env & secrets
+.env
+.env*.local
+service-account*.json
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data / models (generated)
+*.db
+*.db-journal
+ai/models/
+emulator-data/
+
+# Firebase
+firebase-debug.log
+database-debug.log
+.firebase/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/

@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Design tokens — same values as the Figma/canvas prototype. Dark only. */
+@theme {
+  --color-bg: #0e0f12;
+  --color-surface: #16181c;
+  --color-tile: #1a1c20;
+  --color-border: #212429;
+  --color-text: #f2f3f5;
+  --color-muted: #9ba1aa;
+  --color-accent: #8fb8ff;
+  --color-on-tile: #eceef1;
+
+  --color-fan: #2bb3a3;
+  --color-light: #f5a524;
+  --color-washer: #4c8dff;
+  --color-lock: #8fb8ff;
+
+  --color-good: #34c759;
+  --color-warn: #ffb020;
+  --color-bad: #ff5a52;
+
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --radius-tile: 20px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Rooms grid: 2 columns on phone, more on wider screens */
+.tiles {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 768px) {
+  .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1200px) {
+  .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-tile);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-tile);
+  font-size: 13px;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.chip[data-active="true"] {
+  background: var(--color-text);
+  color: var(--color-bg);
+  border-color: var(--color-text);
+}

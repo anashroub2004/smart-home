@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    name: Web — type-check & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-out
+          path: web/out
+
+  python:
+    name: Python — syntax & simulator imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m py_compile pi/*.py ai/*.py
+      - run: python -c "import sys; sys.path.insert(0,'pi'); import sim_house, firebase_writer, rest_db"
+      - run: python -c "import json; json.load(open('docs/seed.json')); json.load(open('database.rules.json'))"

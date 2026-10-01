@@ -1,0 +1,50 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "config":       { ".read": "auth != null", ".write": "root.child('users').child(auth.uid).child('role').val() === 'owner'" },
+    "home_state":   { ".read": "auth != null", ".write": false },
+    "nodes":        { ".read": "auth != null", ".write": false },
+    "summaries":    { ".read": "auth != null", ".write": false },
+    "energy_daily": { ".read": "auth != null", ".write": false },
+    "ai_schedule":  { ".read": "auth != null", ".write": false },
+    "access_log":   { ".read": "auth != null", ".write": false, ".indexOn": ["at"] },
+
+    "events": {
+      ".read": "auth != null",
+      ".write": false,
+      ".indexOn": ["at", "device", "kind"]
+    },
+
+    "commands": {
+      ".read": "auth != null",
+      "$device": {
+        ".write": "auth != null",
+        ".validate": "newData.hasChildren(['v', 'by', 'at', 'status'])"
+      }
+    },
+
+    "suggestions": {
+      ".read": "auth != null",
+      "$id": {
+        ".write": "auth != null && data.exists()"
+      }
+    },
+
+    "alerts": {
+      ".read": "auth != null",
+      ".indexOn": ["at"],
+      "$id": {
+        "ack": { ".write": "auth != null" }
+      }
+    },
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    }
+  }
+}
