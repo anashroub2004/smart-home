@@ -26,13 +26,9 @@ class Writer:
         self.db.put("config", config)
 
     # ------------------------------------------------------------ live state
-    def write_home_state(self, rooms, devices, power_w):
-        self.db.put("home_state", {
-            "updated_at": now_ms(),
-            "power_w": round(power_w, 2),
-            "rooms": rooms,
-            "devices": devices,
-        })
+    def write_home_state(self, state):
+        """state: rooms, devices, power_w, base_w, scene, door — see contract.md"""
+        self.db.put("home_state", {**state, "updated_at": now_ms()})
 
     def patch_device(self, device, state):
         self.db.patch(f"home_state/devices/{device}", state)
@@ -58,9 +54,16 @@ class Writer:
         self.db.patch(f"commands/{device}", data)
 
     # ------------------------------------------------------------ events log (Pi only)
-    def log_event(self, kind, text, source, result="ok", **fields):
-        """fields: device, room, by, trigger, confidence, from_, to, latency_ms, tags"""
-        ev = {"at": now_ms(), "kind": kind, "text": text, "source": source, "result": result}
+    def log_event(self, kind, group, title, source, src_label, result="ok", **fields):
+        """
+        kind   : device | door | motion | node | ai | rule | scene | alert | config
+        group  : manual | ai | rule | door | system   (the History filter + colour)
+        title  : "Living room fan turned on"
+        fields : short, why, by, by_label, change, device, room, node, confidence,
+                 from_, to, latency_ms, saved_wh, tags
+        """
+        ev = {"at": now_ms(), "kind": kind, "group": group, "title": title,
+              "source": source, "src_label": src_label, "result": result}
         if "from_" in fields:
             fields["from"] = fields.pop("from_")
         ev.update({k: v for k, v in fields.items() if v is not None})
@@ -84,14 +87,20 @@ class Writer:
     def write_ai_schedule(self, decisions):
         self.db.put("ai_schedule", {d["device"]: {**d, "at": now_ms()} for d in decisions})
 
-    def push_suggestion(self, device, action, confidence, text):
+    def write_ai_insights(self, insights):
+        self.db.put("ai_insights", insights)
+
+    def push_suggestion(self, device, action, confidence, title, why):
         return self.db.post("suggestions", {
             "device": device, "action": action, "confidence": round(confidence, 2),
-            "text": text, "at": now_ms(),
+            "title": title, "why": why, "at": now_ms(),
         })
 
     def get_suggestions(self):
         return self.db.get("suggestions") or {}
+
+    def mark_suggestion(self, sid, data):
+        self.db.patch(f"suggestions/{sid}", data)
 
     # ------------------------------------------------------------ security
     def log_access(self, method, ok, who=None):
@@ -100,5 +109,9 @@ class Writer:
             entry["who"] = who
         self.db.post("access_log", entry)
 
-    def push_alert(self, text, level="critical"):
-        return self.db.post("alerts", {"at": now_ms(), "level": level, "text": text})
+    def push_alert(self, level, title, where, go, lines=None):
+        """level: critical | warning | info | good. go: the web screen to open (security, energy, settings)."""
+        alert = {"at": now_ms(), "level": level, "title": title, "where": where, "go": go}
+        if lines:
+            alert["lines"] = lines
+        return self.db.post("alerts", alert)

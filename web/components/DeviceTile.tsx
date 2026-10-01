@@ -1,70 +1,61 @@
 "use client";
 
 import { useRef } from "react";
-import { Loader2, MoreHorizontal } from "lucide-react";
 import type { DeviceConfig, DeviceState } from "@/lib/contract";
 import { useDeviceCommand } from "@/lib/home";
+import { tileState } from "@/lib/view";
 import { useDeviceSheet } from "./DeviceSheet";
-import { DEVICE_COLOR, DEVICE_ICON } from "./icons";
+import { DeviceIcon } from "./DeviceIcon";
+import { IMore } from "./Icons";
+import { useToast } from "./Toast";
 
-const SOURCE_LABEL: Record<string, string> = {
-  web: "App", button: "Button", ai: "AI", rule: "Rule",
-  keypad: "Keypad", fingerprint: "Fingerprint", exit_button: "Exit button", system: "System",
-};
-
+/** Tap = on/off. ⋯ (or long-press / right-click) = device sheet. Same markup as the prototype. */
 export function DeviceTile({
   id,
   cfg,
+  label,
   state,
   offline,
 }: {
   id: string;
   cfg: DeviceConfig;
+  label: string;
   state?: DeviceState;
-  offline?: boolean;
+  offline: boolean;
 }) {
-  const { ui, send } = useDeviceCommand(id);
+  const toast = useToast();
+  const { ui, send } = useDeviceCommand(id, () => toast(`${label} didn't respond. Nothing changed.`));
   const sheet = useDeviceSheet();
   const press = useRef<{ timer?: ReturnType<typeof setTimeout>; long: boolean }>({ long: false });
-  const on = state?.v === 1;
-  const Icon = DEVICE_ICON[cfg.type];
-  const color = DEVICE_COLOR[cfg.type];
-  const isLock = cfg.type === "lock";
 
-  const status =
-    offline ? "Offline"
-    : ui === "pending" ? "Sending…"
-    : ui === "failed" ? "Failed"
-    : ui === "timeout" ? "No response"
-    : isLock ? (on ? "Unlocked" : "Locked")
-    : on ? (cfg.type === "fan" && state?.speed ? `On · ${state.speed}%` : "On")
-    : "Off";
+  const pending = ui === "pending";
+  const on = state?.v === 1 && !offline;
+  const cls = "tile" + (on ? " on" : "") + (pending ? " pending" : "") + (offline ? " off-line" : "") +
+    (ui === "failed" || ui === "timeout" ? " failed" : "");
 
-  // Tap = toggle. Long-press (phone) or right-click (desktop) = open the device sheet.
+  function toggle() {
+    if (press.current.long || offline || pending) return;
+    if (cfg.type === "lock") send(1);
+    else send(state?.v ? 0 : 1, cfg.type === "fan" && !state?.v ? state?.speed || 70 : undefined);
+  }
   function startPress() {
     press.current.long = false;
     press.current.timer = setTimeout(() => {
       press.current.long = true;
       sheet.open(id);
-    }, 450);
+    }, 500);
   }
-  function endPress() {
-    if (press.current.timer) clearTimeout(press.current.timer);
-  }
-
-  function tap() {
-    if (press.current.long) return; // the long-press already opened the sheet
-    if (offline || ui === "pending") return;
-    if (isLock) send(1); // lock: "1" = open for a few seconds; the door relocks itself
-    else send(on ? 0 : 1, cfg.type === "fan" && !on ? state?.speed || 60 : undefined);
-  }
-
-  const bad = ui === "failed" || ui === "timeout";
+  const endPress = () => press.current.timer && clearTimeout(press.current.timer);
 
   return (
-    <div className="relative">
+    <div className="tile-wrap">
       <button
-        onClick={tap}
+        type="button"
+        className={cls}
+        aria-pressed={state?.v === 1}
+        aria-label={`Turn ${label.toLowerCase()} ${state?.v ? "off" : "on"}`}
+        disabled={offline}
+        onClick={toggle}
         onPointerDown={startPress}
         onPointerUp={endPress}
         onPointerLeave={endPress}
@@ -74,40 +65,20 @@ export function DeviceTile({
           endPress();
           sheet.open(id);
         }}
-        disabled={offline}
-        aria-pressed={on}
-        className="relative flex w-full select-none [-webkit-touch-callout:none] aspect-[1.15] md:aspect-[1.35] flex-col justify-between rounded-[var(--radius-tile)] border p-4 text-left transition active:scale-[0.98] disabled:opacity-45"
-        style={{
-          background: on ? "var(--color-on-tile)" : "var(--color-tile)",
-          borderColor: bad ? "var(--color-bad)" : on ? "transparent" : "var(--color-border)",
-          color: on ? "#111" : "var(--color-text)",
-        }}
       >
-        <span
-          className="grid h-10 w-10 place-items-center rounded-full"
-          style={{ background: on ? color : "var(--color-surface)", color: on ? "#fff" : color }}
-        >
-          {ui === "pending" ? <Loader2 size={20} className="animate-spin" /> : <Icon size={20} className={on && cfg.type === "fan" ? "animate-spin [animation-duration:2.5s]" : ""} />}
+        <span className={`t-ic ic-${cfg.type}`}>
+          <DeviceIcon type={cfg.type} />
         </span>
         <span>
-          <span className="block font-semibold leading-tight">{cfg.name}</span>
-          <span className="mt-0.5 block text-[13px]" style={{ color: bad ? "var(--color-bad)" : on ? "#555" : "var(--color-muted)" }}>
-            {status}
+          <span className="t-name" style={{ display: "block" }}>{cfg.name}</span>
+          <span className="t-state num" style={{ display: "block" }}>
+            {pending && <span className="spin" />}
+            {tileState(cfg, state, offline, pending)}
           </span>
-          {state?.src && !bad && ui !== "pending" && (
-            <span className="mt-1 block text-[11px]" style={{ color: on ? "#777" : "var(--color-muted)" }}>
-              by {SOURCE_LABEL[state.src] ?? state.src}
-            </span>
-          )}
         </span>
       </button>
-      <button
-        onClick={() => sheet.open(id)}
-        aria-label={`${cfg.name} details`}
-        className="absolute right-2.5 top-2.5 grid h-8 w-8 place-items-center rounded-full transition hover:bg-black/10"
-        style={{ color: on ? "#555" : "var(--color-muted)" }}
-      >
-        <MoreHorizontal size={18} />
+      <button type="button" className={on ? "more dark" : "more"} aria-label={`${label} details`} onClick={() => sheet.open(id)}>
+        <IMore size={18} />
       </button>
     </div>
   );

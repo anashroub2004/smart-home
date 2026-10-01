@@ -1,57 +1,103 @@
 "use client";
 
-import { Bot, Check, X } from "lucide-react";
-import { PageHeader } from "@/components/PageHeader";
-import { answerSuggestion, useAiSchedule, useSuggestions } from "@/lib/home";
-import { timeAgo } from "@/lib/format";
+import { Md } from "@/components/Md";
+import { answerSuggestion, useAiInsights, useAiSchedule, useConfig, useSuggestions } from "@/lib/home";
+import { clock } from "@/lib/format";
+import { isToday } from "@/lib/view";
 
 export default function InsightsPage() {
-  const { list: suggestions } = useSuggestions();
+  const { data: config } = useConfig();
   const { data: schedule } = useAiSchedule();
-  const decisions = Object.values(schedule ?? {}).sort((a, b) => b.p_on - a.p_on);
+  const { list: suggestions } = useSuggestions();
+  const { data: insights } = useAiInsights();
+
+  const actAt = Math.round((config?.thresholds.ai_act_at ?? 0.8) * 100);
+  const pauseH = (config?.thresholds.override_pause_min ?? 120) / 60;
+  const plan = Object.values(schedule ?? {})
+    .filter((d) => (d.action === "schedule_on" || d.action === "keep_on") && d.title)
+    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+  const sugg = suggestions.filter((s) => isToday(s.at)).slice(0, 6);
+  const m = insights?.metrics;
 
   return (
     <>
-      <PageHeader title="Insights" sub="The AI predicts each device 60 minutes ahead. It only switches devices on; rules switch them off." />
+      <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>Insights</h1>
+      <p className="muted" style={{ margin: "-12px 0 0", fontSize: 14 }}>
+        Your home learns your routine and prepares rooms before you need them.
+      </p>
 
-      <h2 className="mb-2 mt-6 text-lg font-bold">Suggestions</h2>
-      {suggestions.length ? (
-        <ul className="space-y-3">
-          {suggestions.map((s) => (
-            <li key={s.id} className="card flex items-center gap-3 p-4">
-              <Bot size={20} className="text-accent" />
-              <div className="flex-1">
-                <p className="text-sm">{s.text}</p>
-                <p className="text-xs text-muted">{Math.round(s.confidence * 100)}% confident · {timeAgo(s.at)}</p>
+      <section className="card">
+        <h2 className="h-label">Planned for the next hour</h2>
+        {plan.map((p) => {
+          const pct = `${Math.round(p.p_on * 100)}%`;
+          return (
+            <div key={p.device} className="list-row" style={{ alignItems: "flex-start" }}>
+              <span className="num" style={{ fontWeight: 700, color: "#8FB8FF", width: 48, flex: "none" }}>{p.time}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600 }}>{p.title}</div>
+                <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>{p.why}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+                  <div className="conf" style={{ maxWidth: 160 }}><span style={{ width: pct }} /></div>
+                  <span className="muted num" style={{ fontSize: 12 }}>{pct} sure</span>
+                </div>
               </div>
-              <button aria-label="Dismiss" onClick={() => answerSuggestion(s.id, s, false)} className="grid h-9 w-9 place-items-center rounded-full bg-tile text-muted"><X size={16} /></button>
-              <button aria-label="Accept" onClick={() => answerSuggestion(s.id, s, true)} className="grid h-9 w-9 place-items-center rounded-full bg-text text-bg"><Check size={16} /></button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-sm text-muted">No suggestions right now.</p>
-      )}
+            </div>
+          );
+        })}
+        {!plan.length && <div className="empty">Nothing planned right now.</div>}
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+          The AI acts on its own only when it is at least {actAt}% sure. Below that, it asks you.
+        </div>
+      </section>
 
-      <h2 className="mb-2 mt-8 text-lg font-bold">Next hour</h2>
-      {decisions.length ? (
-        <ul className="card divide-y divide-border px-4">
-          {decisions.map((d) => (
-            <li key={d.device} className="flex items-center gap-3 py-3 text-sm">
-              <span className="flex-1">{d.device}</span>
-              <span className="text-muted">{d.action.replaceAll("_", " ")}</span>
-              <span className="w-24">
-                <span className="block h-1.5 rounded-full bg-tile">
-                  <span className="block h-full rounded-full bg-accent" style={{ width: `${d.p_on * 100}%` }} />
-                </span>
-              </span>
-              <span className="w-10 text-right text-muted">{Math.round(d.p_on * 100)}%</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-sm text-muted">No predictions yet — the AI service writes here every 15 minutes.</p>
-      )}
+      <section className="card">
+        <h2 className="h-label">Waiting for your OK</h2>
+        {sugg.map((g) => {
+          const pct = `${Math.round(g.confidence * 100)}%`;
+          const accepted = g.response === "accept";
+          return (
+            <div key={g.id} className="list-row" style={{ alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600 }}>{g.title}</div>
+                <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                  {g.why} · <span className="num">{pct}</span> sure · <span className="num">{clock(g.at)}</span>
+                </div>
+                {!g.response ? (
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button type="button" className="btn btn-light" onClick={() => answerSuggestion(g.id, g, true)}>Yes</button>
+                    <button type="button" className="btn" onClick={() => answerSuggestion(g.id, g, false)}>Not now</button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, marginTop: 8, color: accepted ? "#34C759" : "#9BA1AA" }}>
+                    {accepted ? g.done_text ?? "Done." : "Okay. Your home will learn from this."}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {!sugg.length && <div className="empty">No questions from the AI today.</div>}
+      </section>
+
+      <section className="card">
+        <h2 className="h-label">What your home has learned</h2>
+        {(insights?.learned ?? []).map((l) => (
+          <div key={l} className="list-row"><span><Md text={l} /></span></div>
+        ))}
+        {!insights?.learned?.length && <div className="empty">Still learning — this fills in after a few weeks.</div>}
+      </section>
+
+      <section className="card">
+        <h2 className="h-label">How the model is doing</h2>
+        <div className="big-metrics" style={{ marginTop: 4 }}>
+          <div><div className="bm-v num">{m ? `${Math.round(m.within_15 * 100)}%` : "—"}</div><div className="bm-l">Right within 15 min</div></div>
+          <div><div className="bm-v num">{m ? `${Math.round(m.exact * 100)}%` : "—"}</div><div className="bm-l">Right to the minute</div></div>
+          <div><div className="bm-v num">{m ? clock(m.retrained_at) : "—"}</div><div className="bm-l">Last retrained</div></div>
+        </div>
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
+          {m?.model ?? "Gradient Boosting"}, trained nightly on your hub. When you change a device by hand, the AI leaves it alone for {pauseH} hours and learns from it.
+        </div>
+      </section>
     </>
   );
 }

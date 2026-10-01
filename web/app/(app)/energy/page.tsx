@@ -1,88 +1,113 @@
 "use client";
 
 import { useMemo } from "react";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { PageHeader } from "@/components/PageHeader";
-import { DEVICE_COLOR } from "@/components/icons";
-import { useConfig, useEnergyDaily, useHomeState } from "@/lib/home";
-import { dayKey, round } from "@/lib/format";
-import type { DeviceConfig } from "@/lib/contract";
+import { ICheck } from "@/components/Icons";
+import { useConfig, useEnergyDaily, useEvents, useHomeState } from "@/lib/home";
+import { clock, dayKey } from "@/lib/format";
+import { allDevices, C, isToday } from "@/lib/view";
+
+const total = (d?: Record<string, number>) => Object.values(d ?? {}).reduce((a, b) => a + b, 0);
 
 export default function EnergyPage() {
   const { data: config } = useConfig();
   const { data: state } = useHomeState();
   const { data: daily } = useEnergyDaily();
+  const { list: events } = useEvents(400);
 
-  const devices = useMemo(() => {
-    const all: Record<string, DeviceConfig> = {};
-    Object.values(config?.rooms ?? {}).forEach((r) => Object.assign(all, r.devices ?? {}));
-    return all;
-  }, [config]);
+  const today = daily?.[dayKey()];
+  const todayWh = total(today);
+  const yesterdayWh = total(daily?.[dayKey(new Date(Date.now() - 86_400_000))]);
+  const now = new Date();
+  const dayFrac = (now.getHours() * 60 + now.getMinutes()) / 1440;
+  const yesterdaySoFar = yesterdayWh * dayFrac;
+  const diffPct = yesterdaySoFar > 0 ? Math.round(((todayWh - yesterdaySoFar) / yesterdaySoFar) * 100) : null;
 
-  const today = daily?.[dayKey()] ?? {};
-  const todayTotal = Object.values(today).reduce((a, b) => a + b, 0);
+  const waste = events.filter((e) => e.saved_wh && isToday(e.at));
+  const wasteWh = waste.reduce((a, e) => a + (e.saved_wh ?? 0), 0);
 
   const week = useMemo(() => {
-    const out = [];
+    const days = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const day = daily?.[dayKey(d)] ?? {};
-      out.push({
-        day: d.toLocaleDateString([], { weekday: "short" }),
-        wh: Math.round(Object.values(day).reduce((a, b) => a + b, 0)),
-      });
+      const d = new Date(Date.now() - i * 86_400_000);
+      days.push({ label: i === 0 ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" }), wh: total(daily?.[dayKey(d)]), today: i === 0 });
     }
-    return out;
+    const max = Math.max(1, ...days.map((d) => d.wh));
+    return days.map((d) => ({ ...d, h: `${Math.max(4, (d.wh / max) * 100)}%` }));
   }, [daily]);
+
+  const byDevice = useMemo(() => {
+    const rows = [{ name: "Hub, nodes & sensors", wh: today?._base ?? 0 }];
+    for (const d of allDevices(config)) if (d.cfg.watts) rows.push({ name: d.label, wh: today?.[d.id] ?? 0 });
+    const max = Math.max(0.001, ...rows.map((r) => r.wh));
+    return rows.sort((a, b) => b.wh - a.wh).map((r) => ({ ...r, pct: `${(r.wh / max) * 100}%` }));
+  }, [config, today]);
 
   return (
     <>
-      <PageHeader title="Energy" sub="Measured by INA226 sensors on each device" />
-
-      <div className="mt-6 grid grid-cols-2 gap-3">
-        <div className="card p-4">
-          <p className="text-[13px] text-muted">Now</p>
-          <p className="mt-1 text-2xl font-bold">{round(state?.power_w, 1)} <span className="text-base text-muted">W</span></p>
+      <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>Energy</h1>
+      <section>
+        <div className="num" style={{ fontSize: 52, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1 }}>
+          {Math.round(todayWh)}
+          <span style={{ fontSize: 20, color: "#9BA1AA", fontWeight: 600 }}> Wh today</span>
         </div>
-        <div className="card p-4">
-          <p className="text-[13px] text-muted">Today</p>
-          <p className="mt-1 text-2xl font-bold">{round(todayTotal, 1)} <span className="text-base text-muted">Wh</span></p>
+        <div style={{ marginTop: 8, fontSize: 14, color: "#9BA1AA" }}>
+          {diffPct !== null && (
+            <>
+              <span style={{ color: diffPct <= 0 ? C.good : C.warn, fontWeight: 700 }}>
+                {Math.abs(diffPct)}% {diffPct <= 0 ? "less" : "more"}
+              </span>{" "}
+              than yesterday at this time ·{" "}
+            </>
+          )}
+          using <span className="num" style={{ color: "#F2F3F5", fontWeight: 700 }}>{(state?.power_w ?? 0).toFixed(1)} W</span> now
         </div>
-      </div>
+      </section>
 
-      <div className="card mt-4 h-56 p-4">
-        <p className="mb-2 text-[13px] text-muted">Last 7 days (Wh)</p>
-        <ResponsiveContainer width="100%" height="85%">
-          <BarChart data={week}>
-            <XAxis dataKey="day" stroke="#9BA1AA" fontSize={12} tickLine={false} axisLine={false} />
-            <YAxis stroke="#9BA1AA" fontSize={12} tickLine={false} axisLine={false} width={36} />
-            <Tooltip cursor={{ fill: "#212429" }} contentStyle={{ background: "#16181C", border: "1px solid #212429", borderRadius: 12 }} />
-            <Bar dataKey="wh" fill="#8FB8FF" radius={[6, 6, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <section className="card" style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#13261B", color: "#34C759", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+          <ICheck size={20} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>
+            Waste stopped today · <span className="num">{wasteWh.toFixed(1)} Wh</span>
+          </div>
+          {waste.slice(0, 5).map((e, i) => (
+            <div key={e.id} className="list-row" style={i === 0 ? { paddingTop: 10 } : undefined}>
+              <span style={{ flex: 1 }}>{e.title.replace(" turned off", " auto-off")} · {e.short?.split(" · ")[0].toLowerCase()}</span>
+              <span className="muted num">{clock(e.at)}</span>
+            </div>
+          ))}
+          {!waste.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Nothing left running in an empty room so far today.</div>}
+        </div>
+      </section>
 
-      <h2 className="mb-2 mt-8 text-lg font-bold">By device</h2>
-      <ul className="card divide-y divide-border px-4">
-        {Object.entries(devices)
-          .filter(([, d]) => d.type !== "lock")
-          .map(([id, d]) => {
-            const wh = today[id] ?? 0;
-            const pct = todayTotal ? (wh / todayTotal) * 100 : 0;
-            return (
-              <li key={id} className="py-3">
-                <div className="flex justify-between text-sm">
-                  <span>{d.name} <span className="text-muted">· {id}</span></span>
-                  <span className="text-muted">{round(state?.devices?.[id]?.watts, 1)} W · {round(wh, 1)} Wh</span>
-                </div>
-                <div className="mt-2 h-1.5 rounded-full bg-tile">
-                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: DEVICE_COLOR[d.type] }} />
-                </div>
-              </li>
-            );
-          })}
-      </ul>
+      <section className="card">
+        <h2 className="h-label">This week</h2>
+        <div className="wbars" role="img" aria-label="Daily energy for the last 7 days">
+          {week.map((w) => (
+            <div key={w.label} className="wbar">
+              <span className="num muted" style={{ fontSize: 11 }}>{Math.round(w.wh)}</span>
+              <span className={w.today ? "bar today" : "bar"} style={{ height: w.h }} />
+              <span className="muted" style={{ fontSize: 12 }}>{w.label}</span>
+            </div>
+          ))}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Wh per day · today is still counting</div>
+      </section>
+
+      <section className="card">
+        <h2 className="h-label">Where it went today</h2>
+        {byDevice.map((b) => (
+          <div key={b.name} className="list-row">
+            <span style={{ flex: 1 }}>{b.name}</span>
+            <div className="conf" style={{ maxWidth: 120 }}><span style={{ width: b.pct, background: "#ECEEF1" }} /></div>
+            <span className="num" style={{ width: 64, textAlign: "right" }}>{b.wh.toFixed(1)} Wh</span>
+          </div>
+        ))}
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Measured per device by INA226 sensors. Base load is the hub, nodes and sensors.
+        </div>
+      </section>
     </>
   );
 }

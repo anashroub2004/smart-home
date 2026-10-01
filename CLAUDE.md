@@ -7,8 +7,10 @@
   Only `web/lib/home.ts` imports `firebase/database`. Screens use its hooks.
   Rooms/devices are drawn from `/config` — never hard-code a device in the UI.
   Dynamic pages use query params (`/room?id=living`) because of static export.
-- Design tokens live in `web/app/globals.css` (dark only, Manrope).
-- `/events` is written by the Pi only. The web writes only `/commands`, `/ai_pause`, `/suggestions/{id}`, `/alerts/{id}/ack`, `/config`.
+- UI = the canvas prototype 1:1: `web/app/globals.css` is the prototype CSS, `components/Icons.tsx` its SVGs.
+  Use the prototype class names (`card`, `tile`, `scene`, `btn`, `list-row`, `big-metrics`, …), not new styles.
+  Words/colours derived from data live in `web/lib/view.ts`.
+- `/events` is written by the Pi only. The web writes only `/commands`, `/ai_pause`, `/prefs`, `/suggestions/{id}`, `/alerts/{id}/ack`, `/config`.
 - `pi/` uses the Python standard library for the simulator; `sim_house.py` must behave like the real Pi services.
 - AI: `ai/smart_home_ai.py` (HistGradientBoosting, 60 min horizon, acts ≥0.80, suggests ≥0.60, only switches ON).
 - Timezone: Asia/Hebron. Timestamps in Firebase: ms since epoch (UTC).

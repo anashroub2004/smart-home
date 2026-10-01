@@ -1,69 +1,68 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { EventRow, sourceGroup } from "@/components/EventRow";
-import { PageHeader } from "@/components/PageHeader";
-import { useEvents } from "@/lib/home";
+import { EventItem } from "@/components/EventItem";
+import { ScreenHeader } from "@/components/ScreenHeader";
+import type { EventGroup } from "@/lib/contract";
+import { useConfig, useEvents } from "@/lib/home";
+import { isToday } from "@/lib/view";
 
-const FILTERS = [
-  { id: "all", label: "All" },
-  { id: "manual", label: "Manual" },
-  { id: "ai", label: "AI" },
-  { id: "rule", label: "Rules" },
-  { id: "door", label: "Door" },
-  { id: "failed", label: "Failed" },
-] as const;
-
-type Filter = (typeof FILTERS)[number]["id"];
+const FILTERS: [EventGroup | "all", string][] = [
+  ["all", "All"],
+  ["manual", "By you"],
+  ["ai", "AI"],
+  ["rule", "Rules"],
+  ["door", "Door"],
+  ["system", "System"],
+];
 
 export default function HistoryPage() {
-  const [limit, setLimit] = useState(100);
-  const [filter, setFilter] = useState<Filter>("all");
+  const { data: config } = useConfig();
+  const [limit, setLimit] = useState(300);
+  const [filter, setFilter] = useState<EventGroup | "all">("all");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [earlier, setEarlier] = useState(false);
   const { list, loading } = useEvents(limit);
 
-  const shown = useMemo(
-    () =>
-      list.filter((e) =>
-        filter === "all" ? true : filter === "failed" ? e.result !== "ok" : sourceGroup(e) === filter,
-      ),
-    [list, filter],
-  );
-
-  // group by day
-  const days = useMemo(() => {
-    const m = new Map<string, typeof shown>();
-    shown.forEach((e) => {
-      const k = new Date(e.at).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
-      m.set(k, [...(m.get(k) ?? []), e]);
-    });
-    return [...m.entries()];
-  }, [shown]);
+  const scope = useMemo(() => (earlier ? list : list.filter((e) => isToday(e.at))), [list, earlier]);
+  const shown = scope.filter((e) => filter === "all" || e.group === filter || e.tags?.includes(filter));
+  const count = (g: EventGroup) => list.filter((e) => isToday(e.at) && e.group === g).length;
 
   return (
     <>
-      <PageHeader title="History" sub="Every action in the home — who, what, why and the result. Tap a row for details." />
+      <ScreenHeader title="History" />
+      <p className="muted" style={{ margin: "-10px 0 0", fontSize: 14 }}>
+        Every action in your home{earlier ? "" : " today"}: what changed, who or what did it, and whether it worked. Tap an entry for details.
+      </p>
 
-      <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
-        {FILTERS.map((f) => (
-          <button key={f.id} className="chip" data-active={filter === f.id} onClick={() => setFilter(f.id)}>
-            {f.label}
+      <div className="big-metrics">
+        <div className="bm"><div className="bm-v num">{count("manual")}</div><div className="bm-l">By you</div></div>
+        <div className="bm"><div className="bm-v num">{count("ai")}</div><div className="bm-l">By the AI</div></div>
+        <div className="bm"><div className="bm-v num">{count("rule")}</div><div className="bm-l">By rules</div></div>
+      </div>
+
+      <div className="scenes" role="group" aria-label="Filter history">
+        {FILTERS.map(([id, label]) => (
+          <button key={id} type="button" className={filter === id ? "scene on" : "scene"} aria-pressed={filter === id} onClick={() => { setFilter(id); setOpenId(null); }}>
+            {label}
           </button>
         ))}
       </div>
 
-      {loading && <p className="mt-6 text-muted">Loading…</p>}
-      {!loading && !shown.length && <p className="mt-6 text-sm text-muted">No events.</p>}
+      <section className="card" style={{ padding: "4px 16px" }}>
+        {shown.map((e) => (
+          <EventItem key={e.id} e={e} config={config} open={openId === e.id} onToggle={() => setOpenId(openId === e.id ? null : e.id)} />
+        ))}
+        {!loading && !shown.length && (
+          <div className="muted" style={{ padding: "20px 0", textAlign: "center" }}>Nothing in this filter{earlier ? "" : " today"}.</div>
+        )}
+      </section>
 
-      {days.map(([day, events]) => (
-        <section key={day} className="mt-6">
-          <h2 className="mb-1 text-sm font-semibold text-muted">{day}</h2>
-          <ul className="card px-4">{events.map((e) => <EventRow key={e.id} e={e} />)}</ul>
-        </section>
-      ))}
-
-      {list.length >= limit && (
-        <button onClick={() => setLimit(limit + 100)} className="chip mx-auto mt-6 flex">Load more</button>
-      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {!earlier && <button type="button" className="btn" onClick={() => setEarlier(true)}>Show earlier days</button>}
+        {earlier && list.length >= limit && <button type="button" className="btn" onClick={() => setLimit(limit + 300)}>Load more</button>}
+      </div>
+      <div className="muted" style={{ fontSize: 12.5 }}>Kept on the hub for 90 days and in the cloud for 30 days.</div>
     </>
   );
 }

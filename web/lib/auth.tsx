@@ -60,8 +60,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 
   if (loading || !user) {
     return (
-      <div className="grid min-h-dvh place-items-center text-muted">
-        <span className="animate-pulse text-sm">Loading…</span>
+      <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", color: "#9BA1AA", fontSize: 14 }}>
+        Loading…
       </div>
     );
   }

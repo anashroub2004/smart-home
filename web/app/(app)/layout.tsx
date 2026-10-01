@@ -1,18 +1,27 @@
 "use client";
 
 import { RequireAuth } from "@/lib/auth";
+import { AlertOverlay } from "@/components/AlertOverlay";
 import { DeviceSheetProvider } from "@/components/DeviceSheet";
-import { TabBar } from "@/components/TabBar";
+import { Nav } from "@/components/Nav";
+import { ToastProvider } from "@/components/Toast";
 
+// Same structure as the prototype: .app = nav (bottom on phones, left on desktop) + scrolling content.
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <RequireAuth>
-      <DeviceSheetProvider>
-        <TabBar />
-        <main className="px-4 pb-28 pt-4 md:pb-12 md:pl-66 md:pr-10 md:pt-8">
-          <div className="mx-auto max-w-5xl">{children}</div>
-        </main>
-      </DeviceSheetProvider>
+      <ToastProvider>
+        <DeviceSheetProvider>
+          <div className="app">
+            <div className="scroll">
+              <div className="wrap">{children}</div>
+            </div>
+            {/* after the content so it sits at the bottom on phones; CSS moves it to the left on desktop */}
+            <Nav />
+          </div>
+          <AlertOverlay />
+        </DeviceSheetProvider>
+      </ToastProvider>
     </RequireAuth>
   );
 }
