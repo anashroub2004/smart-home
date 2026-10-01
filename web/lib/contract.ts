@@ -56,7 +56,8 @@ export interface HomeConfig {
   rooms: Record<string, RoomConfig>;
   thresholds: Thresholds;
   scenes?: Record<string, SceneConfig>;
-  fingerprints?: Record<string, string>;
+  /** finger id -> name. Firebase may return it as an array ([null, "Owner", "Fares"]) because the keys are numbers. */
+  fingerprints?: Record<string, string> | (string | null)[];
 }
 
 // ---------------------------------------------------------------- live state

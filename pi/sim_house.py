@@ -329,6 +329,13 @@ class House:
         self.door["last_open"] = {"at": now_ms(), "method": method, **({"who": who} if who else {})}
         self.lock_at = time.time() + 5
 
+    def fingerprints(self):
+        """{finger id: name}. Firebase turns objects with keys "1","2",... into arrays, so accept both."""
+        f = self.config.get("fingerprints") or {}
+        if isinstance(f, list):
+            f = {str(i): name for i, name in enumerate(f) if name}
+        return f or {"1": "Owner"}
+
     def wrong_attempt(self, method):
         if now_ms() < self.door.get("lockout_until", 0):
             return
@@ -364,8 +371,9 @@ class House:
             return
         r = random.random()
         if r < 0.45:
-            finger = random.choice(list(self.config.get("fingerprints", {"1": "Owner"}).keys()))
-            self.open_door("fingerprint", self.config.get("fingerprints", {}).get(finger, "Owner"), finger=finger)
+            fingers = self.fingerprints()
+            finger = random.choice(list(fingers))
+            self.open_door("fingerprint", fingers[finger], finger=finger)
         elif r < 0.6:
             self.open_door("keypad")
         elif r < 0.8:
