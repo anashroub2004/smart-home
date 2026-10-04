@@ -14,6 +14,8 @@ smart-home/
 └─ .github/workflows/    فحص تلقائي لكل push
 ```
 
+📌 **كل القرارات وحالة المشروع:** `docs/PROJECT_CONTEXT.md` — اقرأه أولاً.
+
 **أهم قاعدة:** `docs/contract.md` هو المرجع. الويب لا يعرف مسارات Firebase إلا من ملف واحد: `web/lib/home.ts`.
 
 ---

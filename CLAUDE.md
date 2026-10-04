@@ -1,5 +1,7 @@
 # Notes for Claude (and humans)
 
+**Start every new conversation by reading `docs/PROJECT_CONTEXT.md`** — full decisions, hardware, status and next steps.
+
 - Graduation smart-home project. Talk to the team in **Arabic**; code, UI text and commits in English.
 - `docs/contract.md` is the source of truth for every Firebase path and MQTT topic.
   Changing a shape = update `docs/contract.md`, `web/lib/contract.ts`, `pi/firebase_writer.py` together.
