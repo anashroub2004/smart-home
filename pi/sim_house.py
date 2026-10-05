@@ -84,9 +84,11 @@ def ensure_owner(w):
     return uid
 
 
-def seed(w, reset):
+def seed(w, reset, cloud=False):
     seed_cfg = json.loads(SEED.read_text(encoding="utf-8"))["config"]
     config = None if reset else w.get_config()
+    if cloud and config and config.get("schema") != seed_cfg.get("schema"):
+        sys.exit("The real database has an older data shape. Run again with --reset (it asks before wiping).")
     if reset or (config and config.get("schema") != seed_cfg.get("schema")):
         w.db.put("", {})
         print("database wiped" + ("" if reset else " (data shape changed — re-seeding)"))
@@ -146,6 +148,9 @@ class House:
         self.seen_cmd_at = {}
         self.ai_pause = {}               # device -> until ms (set from the web app)
         self.node_version = {}           # node -> config version it confirmed
+        # the real Firebase free plan has a download quota, so poll it less often than the local emulator
+        self.poll_s = 1.0 if args.cloud else TICK_S
+        self.config_poll_s = 10.0 if args.cloud else TICK_S
         self.load_config(config)
         for n in config["nodes"]:
             self.node_version[n] = config["version"]
@@ -611,10 +616,14 @@ class House:
             t = time.time()
             dt, last_tick = t - last_tick, t
             try:
-                self.handle_commands()
-                cfg = self.w.get_config()
-                if cfg and json.dumps(cfg, sort_keys=True) != json.dumps(self.config, sort_keys=True):
-                    self.apply_config(cfg)
+                if t - self.last.get("cmd", 0) >= self.poll_s:
+                    self.last["cmd"] = t
+                    self.handle_commands()
+                if t - self.last.get("cfg", 0) >= self.config_poll_s:
+                    self.last["cfg"] = t
+                    cfg = self.w.get_config()
+                    if cfg and json.dumps(cfg, sort_keys=True) != json.dumps(self.config, sort_keys=True):
+                        self.apply_config(cfg)
                 if t - self.last["state"] >= 5 / sp:
                     self.last["state"] = t
                     self.sync_ai_pause()
@@ -642,7 +651,8 @@ class House:
                     self.last["motion"] = t
                     self.entrance_motion()
             except (RuntimeError, OSError) as e:
-                print(f"! {e}  (are the emulators running? `firebase emulators:start`)")
+                hint = "check your internet / key" if self.args.cloud else "are the emulators running? `firebase emulators:start`"
+                print(f"! {e}  ({hint})")
                 time.sleep(3)
             time.sleep(TICK_S)
 
@@ -654,17 +664,39 @@ def main():
     ap.add_argument("--fail-rate", type=float, default=0.0, help="fraction of commands that fail (0..1)")
     ap.add_argument("--lockout", action="store_true", help="5 wrong PINs at the door right away")
     ap.add_argument("--reset", action="store_true", help="wipe the database and re-seed")
+    ap.add_argument("--cloud", metavar="KEY_JSON",
+                    help="write to the REAL Firebase project using this service-account key (instead of the emulator)")
+    ap.add_argument("--owner-uid", metavar="UID",
+                    help="with --cloud: the UID of the owner account you created in Firebase Authentication")
     args = ap.parse_args()
 
-    w = Writer(RestDB())
-    print(f"project {PROJECT_ID} · database {w.db.base} · ns {w.db.ns}")
+    if args.cloud:
+        from cloud_db import cloud_db
+        w = Writer(cloud_db(args.cloud))
+        print(f"REAL Firebase · project {w.db.project_id} · {w.db.base}")
+        if args.reset:
+            if input("This wipes the REAL database. Type YES to continue: ") != "YES":
+                sys.exit("cancelled")
+    else:
+        w = Writer(RestDB())
+        print(f"project {PROJECT_ID} · database {w.db.base} · ns {w.db.ns}")
     try:
-        config = seed(w, args.reset)
+        config = seed(w, args.reset, cloud=bool(args.cloud))
     except (RuntimeError, OSError) as e:
+        if args.cloud:
+            sys.exit(f"Cannot reach the real database: {e}")
         sys.exit(f"Cannot reach the Database emulator: {e}\nStart it first:  firebase emulators:start")
-    uid = ensure_owner(w)
-    if uid:
-        print(f"owner login: {OWNER_EMAIL} / {OWNER_PASSWORD}")
+    if args.cloud:
+        if args.owner_uid:
+            w.db.put(f"users/{args.owner_uid}", {"role": "owner", "name": "Owner"})
+            print(f"owner role set for {args.owner_uid}")
+        elif not w.db.get("users"):
+            print("! no owner yet: run once with --owner-uid <UID from Firebase Authentication>, "
+                  "otherwise you can log in but cannot change settings")
+    else:
+        uid = ensure_owner(w)
+        if uid:
+            print(f"owner login: {OWNER_EMAIL} / {OWNER_PASSWORD}")
     backfill_energy(w, config)
     write_ai_insights(w)
     house = House(w, config, args)

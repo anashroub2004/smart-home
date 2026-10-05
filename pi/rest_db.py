@@ -18,22 +18,24 @@ PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "demo-smart-home")
 class RestDB:
     def __init__(self, base_url=None, namespace=None, token="owner"):
         # "Bearer owner" is the emulator's admin token: it bypasses security rules (like the Admin SDK).
+        # token can also be a function that returns a fresh OAuth token (real Firebase, see cloud_db.py).
         self.base = (base_url or f"http://{EMULATOR_URL}").rstrip("/")
-        self.ns = namespace or f"{PROJECT_ID}-default-rtdb"
+        self.ns = namespace if namespace is not None else f"{PROJECT_ID}-default-rtdb"
         self.token = token
 
     def _req(self, method, path, body=None, **query):
-        q = {"ns": self.ns}
+        q = {"ns": self.ns} if self.ns else {}
         # Firebase REST wants JSON values: orderBy='"at"', limitToLast=50
         q.update({k: json.dumps(v) for k, v in query.items()})
         url = f"{self.base}/{path.strip('/')}.json?{urllib.parse.urlencode(q)}"
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Content-Type", "application/json")
-        if self.token:
-            req.add_header("Authorization", f"Bearer {self.token}")
+        token = self.token() if callable(self.token) else self.token
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=5) as r:
+            with urllib.request.urlopen(req, timeout=10) as r:
                 raw = r.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as e:

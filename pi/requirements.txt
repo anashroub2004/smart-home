@@ -1,5 +1,8 @@
-# The simulator (sim_house.py, rest_db.py, firebase_writer.py) needs NOTHING — Python 3.10+ standard library only.
+# The simulator against the local emulator needs NOTHING — Python 3.10+ standard library only.
+#
+# To write to the REAL Firebase project (sim_house.py --cloud, and later the Pi services):
+google-auth>=2.30
+requests>=2.31
 #
 # On the real Raspberry Pi the services will additionally need:
 # paho-mqtt>=2.0
-# firebase-admin>=6.0

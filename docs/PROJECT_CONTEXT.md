@@ -90,7 +90,7 @@
    - `ai/` يتدرب ويكتب `/ai_schedule` و`/suggestions` و`/ai_insights` بدل المعادلة الوهمية داخل المحاكي.
    - إضافة تفسير القرارات.
    - الاقتراحات القديمة تنتهي بعد 15 دقيقة أو عند تغيّر الوضع.
-2. النشر على Firebase الحقيقي (رابط للفريق والمشرف).
+2. Firebase الحقيقي: المشروع `ai-home-aef50` منشأ (Realtime Database في europe-west1 + Email/Password). الخطوات في `docs/DEPLOY.md`: رفع القواعد، تشغيل المحاكي بـ `--cloud`، النشر على https://ai-home-aef50.web.app.
 3. خدمات الـ Pi الحقيقية:
    - `mqtt_ingest`
    - `commands`

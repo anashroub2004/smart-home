@@ -15,4 +15,5 @@
 - `/events` is written by the Pi only. The web writes only `/commands`, `/ai_pause`, `/prefs`, `/suggestions/{id}`, `/alerts/{id}/ack`, `/config`.
 - `pi/` uses the Python standard library for the simulator; `sim_house.py` must behave like the real Pi services.
 - AI: `ai/smart_home_ai.py` (HistGradientBoosting, 60 min horizon, acts ≥0.80, suggests ≥0.60, only switches ON).
+- Real Firebase project: `ai-home-aef50` (alias `prod` in .firebaserc; default stays the `demo-smart-home` emulator). See docs/DEPLOY.md.
 - Timezone: Asia/Hebron. Timestamps in Firebase: ms since epoch (UTC).

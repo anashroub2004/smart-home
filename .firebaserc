@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "demo-smart-home"
+    "default": "demo-smart-home",
+    "prod": "ai-home-aef50"
   }
 }
