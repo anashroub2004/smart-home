@@ -1,6 +1,8 @@
 # Notes for Claude (and humans)
 
 **Start every new conversation by reading `docs/PROJECT_CONTEXT.md`** — full decisions, hardware, status and next steps.
+**End of every work session:** write an update file `docs/updates/YYYY-MM-DD_NN_<topic>.md` from `docs/updates/TEMPLATE.md` (in Arabic) and include it in the commit/patch — other chats can't see this one.
+**Team split:** `docs/TEAM.md` — each chat works on ONE part (web/ pi/ ai/ firmware/) and never edits another part or the shared contract files without agreement.
 
 - Graduation smart-home project. Talk to the team in **Arabic**; code, UI text and commits in English.
 - `docs/contract.md` is the source of truth for every Firebase path and MQTT topic.
