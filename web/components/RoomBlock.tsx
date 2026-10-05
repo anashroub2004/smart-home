@@ -25,7 +25,7 @@ export function RoomBlock({
   offline: boolean;
 }) {
   const occ = occupancy(state, offline);
-  const list = Object.entries(room.devices ?? {}).filter(([, c]) => c.type !== "lock");
+  const list = Object.entries(room.devices ?? {}).filter(([, c]) => !c.caps?.lock);
   return (
     <section className="room-block">
       <Link href={`/room?id=${id}`} className="row-btn" aria-label={`Open ${room.name}`}>

@@ -36,3 +36,13 @@ firmware/
 ## العقد مع الـ Pi
 
 راجع `docs/contract.md` — قسم MQTT. القاعدة: العقدة لا تعرف Firebase إطلاقاً، فقط MQTT.
+
+## الأجهزة من الإعدادات (لا أجهزة ثابتة في الكود)
+
+كل عقدة تستقبل جزءها من `/config` عبر `home/<node>/config` (retained) وتبني أجهزتها منه:
+- `hw.out = relay | pwm | ir | servo` → نوع الخرج على `hw.pin`
+- `hw.button` → زر حائط يعمل حتى بدون إنترنت
+- `hw.ina` → INA226 تُقرأ دورياً وتُرسل على `home/<room>/<device>/power`
+- أجهزة `caps.power = "read"` (مراقبة فقط) ليس لها خرج — فقط INA226.
+
+إضافة جهاز من التطبيق **لا تحتاج إعادة برمجة العقدة**. التفاصيل في `docs/ADDING_DEVICES.md`.

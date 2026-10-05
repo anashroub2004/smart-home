@@ -37,7 +37,7 @@ export default function EnergyPage() {
 
   const byDevice = useMemo(() => {
     const rows = [{ name: "Hub, nodes & sensors", wh: today?._base ?? 0 }];
-    for (const d of allDevices(config)) if (d.cfg.watts) rows.push({ name: d.label, wh: today?.[d.id] ?? 0 });
+    for (const d of allDevices(config)) if (d.cfg.caps?.energy !== "none") rows.push({ name: d.label, wh: today?.[d.id] ?? 0 });
     const max = Math.max(0.001, ...rows.map((r) => r.wh));
     return rows.sort((a, b) => b.wh - a.wh).map((r) => ({ ...r, pct: `${(r.wh / max) * 100}%` }));
   }, [config, today]);

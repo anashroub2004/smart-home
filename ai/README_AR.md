@@ -2,6 +2,9 @@
 
 تعمل على الـ Raspberry Pi، وتتنبأ بحالة كل جهاز **بعد 60 دقيقة**.
 
+**قائمة الأجهزة تُقرأ من إعدادات البيت** (`docs/seed.json` أو `/config`): كل جهاز `control.ai = true` يحصل على نموذج تلقائياً.
+`python smart_home_ai.py devices` يعرض الأجهزة والمعلومات التي يستخدمها كل نموذج.
+
 ## التثبيت على الـ Raspberry Pi
 
 ```bash
@@ -31,11 +34,11 @@ python smart_home_ai.py predict   # يطبع قرارات الساعة القا�
 
 | key | value |
 |---|---|
-| `bedroom/temp`, `living/temp` | الحرارة من SHT31 |
-| `bedroom/lux`, `living/lux` | الإضاءة من BH1750 |
-| `bedroom/occ`, `living/occ` | وجود شخص (C1001 + PIR) = 0 أو 1 |
-| `bedroom/fan`, `living/fan`, `bedroom/light`, `living/light` | حالة الجهاز = 0 أو 1 |
-| `override/<device>` | يُكتب عند أي تحكم يدوي من المستخدم |
+| `<room>/temp` | الحرارة من SHT31 |
+| `<room>/lux` | الإضاءة من BH1750 |
+| `<room>/occ` | وجود شخص (C1001 + PIR) = 0 أو 1 |
+| `device/<id>` | حالة أي جهاز = 0 أو 1 (مثلاً `device/living_fan`) |
+| `override/<id>` | يُكتب عند أي تحكم يدوي من المستخدم |
 
 ## ما تُرجعه الخدمة
 

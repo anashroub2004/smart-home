@@ -30,6 +30,7 @@ import type {
   HomeState,
   NodeStatus,
   Prefs,
+  RoomConfig,
   SceneValue,
   Suggestion,
   Summary,
@@ -131,14 +132,20 @@ export function useConnected(): boolean {
 
 const uid = () => fbAuth().currentUser?.uid ?? "unknown";
 
+export interface CommandOpts {
+  level?: number;
+  mode?: string;
+}
+
 export async function sendCommand(
   device: string,
   v: 0 | 1,
-  speed?: number,
+  opts: CommandOpts = {},
   extra?: Pick<Command, "scene" | "via" | "confidence">,
 ) {
   const cmd: Command = { v, by: uid(), at: serverTimestamp(), status: "pending" };
-  if (speed !== undefined) cmd.speed = speed; // Firebase rejects `undefined`
+  if (opts.level !== undefined) cmd.level = opts.level; // Firebase rejects `undefined`
+  if (opts.mode !== undefined) cmd.mode = opts.mode;
   if (extra?.scene) cmd.scene = extra.scene;
   if (extra?.via) cmd.via = extra.via;
   if (extra?.confidence !== undefined) cmd.confidence = extra.confidence;
@@ -149,8 +156,8 @@ export async function applyScene(sceneId: string, setMap: Record<string, SceneVa
   await Promise.all(
     Object.entries(setMap).map(([device, val]) =>
       typeof val === "number"
-        ? sendCommand(device, val as 0 | 1, undefined, { scene: sceneId })
-        : sendCommand(device, val.v as 0 | 1, val.speed, { scene: sceneId }),
+        ? sendCommand(device, val as 0 | 1, {}, { scene: sceneId })
+        : sendCommand(device, val.v as 0 | 1, { level: val.level, mode: val.mode }, { scene: sceneId }),
     ),
   );
 }
@@ -158,7 +165,7 @@ export async function applyScene(sceneId: string, setMap: Record<string, SceneVa
 export async function answerSuggestion(id: string, s: Suggestion, accept: boolean) {
   await update(ref(fbDb(), PATHS.suggestion(id)), { response: accept ? "accept" : "dismiss" });
   if (accept) {
-    await sendCommand(s.device, s.action === "on" ? 1 : 0, undefined, {
+    await sendCommand(s.device, s.action === "on" ? 1 : 0, {}, {
       via: "suggestion",
       confidence: s.confidence,
     });
@@ -196,6 +203,14 @@ export async function addDevice(config: HomeConfig, room: string, id: string, de
     ...config,
     rooms: { ...config.rooms, [room]: { ...r, devices: { ...(r.devices ?? {}), [id]: device } } },
   });
+}
+
+export async function addRoom(config: HomeConfig, id: string, room: RoomConfig) {
+  return saveConfig({ ...config, rooms: { ...config.rooms, [id]: room } });
+}
+
+export async function updateDevice(config: HomeConfig, room: string, id: string, device: DeviceConfig) {
+  return addDevice(config, room, id, device);
 }
 
 export async function removeDevice(config: HomeConfig, room: string, id: string) {
@@ -238,7 +253,7 @@ export function useDeviceCommand(device: string, onFail?: (why: CmdUi, error?: s
   );
 
   const send = useCallback(
-    async (v: 0 | 1, speed?: number) => {
+    async (v: 0 | 1, opts: CommandOpts = {}) => {
       waiting.current = true;
       setUi("pending");
       if (timer.current) clearTimeout(timer.current);
@@ -251,7 +266,7 @@ export function useDeviceCommand(device: string, onFail?: (why: CmdUi, error?: s
         }
       }, TIMEOUT_MS);
       try {
-        await sendCommand(device, v, speed);
+        await sendCommand(device, v, opts);
       } catch {
         waiting.current = false;
         setUi("failed");

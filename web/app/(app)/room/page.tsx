@@ -75,7 +75,7 @@ function Room() {
       : rs?.occ
         ? "Detected by motion sensor (PIR)"
         : `No motion${since ? ` for ${since}` : ""} (PIR)`;
-  const devices = Object.entries(room.devices ?? {}).filter(([, c]) => c.type !== "lock");
+  const devices = Object.entries(room.devices ?? {}).filter(([, c]) => !c.caps?.lock);
   const ticks = [24, 18, 12, 6].map((h) => new Date(Date.now() - h * 3_600_000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
 
   return (

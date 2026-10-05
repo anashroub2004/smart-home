@@ -206,3 +206,49 @@ export const IMore = ({ size = 18 }: P) => (
 
 /** Same drawing as ILeave — used for the door exit button. */
 export const IExitDoor = ILeave;
+
+// ---------- extra device icons (same stroke style) ----------
+export const ITv = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <rect x="3" y="5" width="18" height="12" rx="2" />
+    <path d="M8 21h8M12 17v4" />
+  </Svg>
+);
+export const IFridge = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <rect x="5" y="2.5" width="14" height="19" rx="2.5" />
+    <path d="M5 10h14M9 6v2M9 13v3" />
+  </Svg>
+);
+export const IAc = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M12 2v20M4.9 6l14.2 12M19.1 6 4.9 18" />
+    <path d="m9.5 3.5 2.5 2 2.5-2M9.5 20.5l2.5-2 2.5 2" />
+  </Svg>
+);
+export const IHeater = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M12 2.5c3 3.2 5.5 6.3 5.5 10a5.5 5.5 0 0 1-11 0c0-2.2 1-3.9 2.3-5.4.4 1.6 1.2 2.6 2.4 3.1C11 7.6 11.2 5 12 2.5z" />
+  </Svg>
+);
+export const IPump = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M12 3s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11z" />
+  </Svg>
+);
+export const IPlug = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5" />
+  </Svg>
+);
+export const IGeneric = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M12 3v8" />
+    <path d="M6.3 6.8a8 8 0 1 0 11.4 0" />
+  </Svg>
+);
+export const IPlus = (p: P) => (
+  <Svg sw={2} {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </Svg>
+);

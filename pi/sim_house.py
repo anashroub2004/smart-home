@@ -40,12 +40,6 @@ AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
 TICK_S = 0.5
 BASE_W = 6.8            # Raspberry Pi + 3 ESP32 nodes + sensors
-SPEEDS = {"Low": 40, "Medium": 70, "High": 100}
-
-
-def speed_name(v):
-    v = v or 70
-    return "High" if v >= 100 else "Medium" if v >= 70 else "Low"
 
 
 def hhmm(dt=None):
@@ -114,14 +108,16 @@ def backfill_energy(w, config):
         w.write_energy_day(day, per)
 
 
-def write_ai_insights(w):
+def write_ai_insights(w, config=None):
     """What the AI service publishes after its nightly training (see ai/smart_home_ai.py train)."""
     retrained = datetime.now().replace(hour=3, minute=0, second=0, microsecond=0)
     if retrained > datetime.now():
         retrained -= timedelta(days=1)
     w.write_ai_insights({
         "metrics": {"within_15": 0.93, "exact": 0.75, "retrained_at": int(retrained.timestamp() * 1000),
-                    "model": "Gradient Boosting", "devices": 5},
+                    "model": "Gradient Boosting",
+                    "devices": sum(1 for r in (config or {}).get("rooms", {}).values()
+                                   for d in (r.get("devices") or {}).values() if (d.get("control") or {}).get("ai"))},
         "learned": [
             "You usually get home around **16:30** on weekdays.",
             "You turn the bedroom fan on most nights when the room is above **27°C**.",
@@ -147,6 +143,7 @@ class House:
         self.last = dict(state=0, summary=0, ai=0, random=0, door=0, motion=0, sugg=0)
         self.seen_cmd_at = {}
         self.ai_pause = {}               # device -> until ms (set from the web app)
+        self.off_alerted = set()         # monitor-only devices we already alerted about
         self.node_version = {}           # node -> config version it confirmed
         # the real Firebase free plan has a download quota, so poll it less often than the local emulator
         self.poll_s = 1.0 if args.cloud else TICK_S
@@ -163,11 +160,50 @@ class House:
             for dev, cfg in (room.get("devices") or {}).items():
                 self.dev_cfg[dev], self.dev_room[dev] = cfg, rid
         old = getattr(self, "devices", {})
-        self.devices = {d: old.get(d, {"v": 0, "src": "system", "at": now_ms(), "watts": 0,
-                                       **({"speed": 70} if c["type"] == "fan" else {})})
-                        for d, c in self.dev_cfg.items()}
+        self.devices = {}
+        for d, c in self.dev_cfg.items():
+            st = old.get(d) or {"v": 0, "src": "system", "at": now_ms(), "watts": 0}
+            lv = self.caps(d).get("level")
+            if lv and "level" not in st:
+                st["level"] = lv["steps"][len(lv["steps"]) // 2]
+            if self.caps(d).get("mode") and "mode" not in st:
+                st["mode"] = self.caps(d)["mode"]["options"][0]
+            self.devices[d] = st
+        locks = [d for d in self.dev_cfg if self.caps(d).get("lock")]
+        self.lock_id = locks[0] if locks else None
         old_rooms = getattr(self, "rooms", {})
         self.rooms = {r: old_rooms.get(r, {"occ": 0}) for r in config["rooms"]}
+
+    # ------------------------------------------------ capabilities (docs/contract.md → device model)
+    def caps(self, d):
+        return self.dev_cfg[d].get("caps") or {}
+
+    def ctrl(self, d):
+        return self.dev_cfg[d].get("control") or {}
+
+    def drules(self, d):
+        return self.dev_cfg[d].get("rules") or {}
+
+    def writable(self, d):
+        return self.caps(d).get("power") == "write"
+
+    def is_lock(self, d):
+        return bool(self.caps(d).get("lock"))
+
+    def icon(self, d):
+        return self.dev_cfg[d].get("icon", "generic")
+
+    def level_label(self, d, value):
+        lv = self.caps(d).get("level")
+        if not lv:
+            return None
+        steps, labels = lv["steps"], lv["labels"]
+        i = min(range(len(steps)), key=lambda k: abs(steps[k] - (value or steps[len(steps) // 2])))
+        return labels[i] if i < len(labels) else f"{steps[i]}%"
+
+    def mid_level(self, d):
+        lv = self.caps(d).get("level")
+        return lv["steps"][len(lv["steps"]) // 2] if lv else None
 
     # ------------------------------------------------ names
     def node_of(self, device):
@@ -179,15 +215,20 @@ class House:
     def label(self, device):
         """'Living room fan', 'Bedroom lights', 'Washer', 'Front door'"""
         cfg = self.dev_cfg[device]
-        if cfg["type"] in ("washer", "lock"):
+        room = self.room_name(self.dev_room[device])
+        if self.icon(device) in ("washer", "lock") or cfg["name"].lower().startswith(room.lower()):
             return cfg["name"]
-        return f"{self.room_name(self.dev_room[device])} {cfg['name'].lower()}"
+        name = cfg["name"] if cfg["name"].isupper() else cfg["name"].lower()   # keep "TV", "AC"
+        return f"{room} {name}"
 
     def state_label(self, device, st):
-        cfg = self.dev_cfg[device]
         if not st.get("v"):
             return "Off"
-        return f"On · {speed_name(st.get('speed'))}" if cfg["type"] == "fan" else "On"
+        if self.caps(device).get("level"):
+            return f"On · {self.level_label(device, st.get('level'))}"
+        if self.caps(device).get("mode") and st.get("mode"):
+            return f"On · {st['mode']}"
+        return "On"
 
     def node_name(self, node):
         return self.config["nodes"].get(node, {}).get("name", node)
@@ -216,12 +257,12 @@ class House:
                     s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
             devs = room.get("devices") or {}
             if "temp" in sensors:
-                fan_cool = -1.2 if any(self.devices[d]["v"] and self.dev_cfg[d]["type"] == "fan" for d in devs) else 0
+                fan_cool = -1.2 if any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs) else 0
                 s["temp"] = round(outdoor + (0.8 if rid == "bedroom" else 0) + fan_cool + random.gauss(0, 0.12), 1)
             if "hum" in sensors:
                 s["hum"] = round(50 - (outdoor - 27) * 1.5 + random.gauss(0, 1))
             if "lux" in sensors:
-                lights = 250 if any(self.devices[d]["v"] and self.dev_cfg[d]["type"] == "light" for d in devs) else 0
+                lights = 250 if any(self.devices[d]["v"] and self.icon(d) == "light" for d in devs) else 0
                 s["lux"] = round(max(0, 600 * daylight + lights + random.gauss(0, 6)))
 
     def update_power(self, dt):
@@ -229,36 +270,47 @@ class House:
         self.energy["_base"] = self.energy.get("_base", 0) + BASE_W * dt / 3600
         for d, st in self.devices.items():
             cfg = self.dev_cfg[d]
-            if st["v"] and cfg.get("watts"):
-                factor = (st.get("speed", 70) / 100) if cfg["type"] == "fan" else 1
+            measured = self.caps(d).get("energy", "estimate") != "none"
+            if st["v"] and cfg.get("watts") and measured:
+                factor = (st.get("level", 70) / 100) if self.caps(d).get("level") else 1
                 st["watts"] = round(cfg["watts"] * factor * random.uniform(0.97, 1.03), 2)
             else:
                 st["watts"] = 0
             total += st["watts"]
-            if cfg.get("watts"):
+            if cfg.get("watts") and measured:
                 self.energy[d] = self.energy.get(d, 0) + st["watts"] * dt / 3600
         return total
 
     # ------------------------------------------------ changing a device (single code path)
-    def set_device(self, device, v, speed=None, *, source, src_label, group, why, by=None, by_label=None,
+    def set_device(self, device, v, level=None, *, mode=None, source, src_label, group, why, by=None, by_label=None,
                    short=None, confidence=None, latency_ms=None, kind="device", tags=None, saved_wh=None,
                    title=None, change=None):
-        cfg = self.dev_cfg[device]
+        caps = self.caps(device)
         st = self.devices[device]
-        before = {k: st.get(k) for k in ("v", "speed") if st.get(k) is not None}
+        keys = ("v", "level", "mode")
+        before = {k: st.get(k) for k in keys if st.get(k) is not None}
         before_label = self.state_label(device, st)
-        speed_only = cfg["type"] == "fan" and st["v"] and v and speed and speed != st.get("speed")
+        level_only = bool(caps.get("level") and st["v"] and v and level and level != st.get("level"))
+        mode_only = bool(caps.get("mode") and st["v"] and v and mode and mode != st.get("mode"))
         st.update(v=int(v), src=source, at=now_ms())
-        if speed is not None and cfg["type"] == "fan":
-            st["speed"] = int(speed)
-        after = {k: st.get(k) for k in ("v", "speed") if st.get(k) is not None}
+        if level is not None and caps.get("level"):
+            st["level"] = int(level)
+        if mode is not None and caps.get("mode"):
+            st["mode"] = mode
+        if caps.get("status"):
+            st["status"] = "Running" if v else "Idle"
+        after = {k: st.get(k) for k in keys if st.get(k) is not None}
         after_label = self.state_label(device, st)
         if source in ("web", "button"):
             self.override_until[device] = time.time() + self.th["override_pause_min"] * 60 / self.speedup
         if title is None:
-            title = f"{self.label(device)} {'speed changed' if speed_only else 'turned on' if v else 'turned off'}"
-        if speed_only and short is None:
-            short = f"{speed_name(before.get('speed'))} → {speed_name(speed)}"
+            what = ("speed changed" if self.icon(device) == "fan" else "level changed") if level_only else \
+                   "mode changed" if mode_only else "turned on" if v else "turned off"
+            title = f"{self.label(device)} {what}"
+        if level_only and short is None:
+            short = f"{self.level_label(device, before.get('level'))} → {self.level_label(device, level)}"
+        if mode_only and short is None:
+            short = f"{before.get('mode')} → {mode}"
         self.w.log_event(kind, group, title, source, src_label, device=device, room=self.dev_room[device],
                          node=self.node_of(device), by=by, by_label=by_label, why=why, short=short,
                          change=change or f"{before_label} → {after_label}", confidence=confidence,
@@ -270,7 +322,7 @@ class House:
         for device, cmd in self.w.get_commands().items():
             if not isinstance(cmd, dict) or cmd.get("status") != "pending":
                 continue
-            key = (cmd.get("at"), cmd.get("v"), cmd.get("speed"))
+            key = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
             if self.seen_cmd_at.get(device) == key:
                 continue
             self.seen_cmd_at[device] = key
@@ -297,6 +349,9 @@ class House:
                 self.scene = scene
             node = self.node_of(device)
             fail = None
+            if not (self.writable(device) or self.is_lock(device)) or not self.ctrl(device).get("app", False):
+                self.w.ack_command(device, False, "This device can't be controlled from the app")
+                continue
             if node in self.offline:
                 fail = f"No response from the {node} node"
             elif random.random() < self.args.fail_rate:
@@ -305,10 +360,11 @@ class House:
                 time.sleep(0.3)
                 self.w.ack_command(device, False, fail)
                 st = self.devices[device]
-                title = (f"Remote unlock failed" if cfg["type"] == "lock" else
+                lock = self.is_lock(device)
+                title = (f"Remote unlock failed" if lock else
                          f"{self.label(device)} {'turned on' if cmd.get('v') else 'turned off'}")
-                self.w.log_event("door" if cfg["type"] == "lock" else "device",
-                                 "door" if cfg["type"] == "lock" else meta["group"], title, meta["source"],
+                self.w.log_event("door" if lock else "device",
+                                 "door" if lock else meta["group"], title, meta["source"],
                                  meta["src_label"], result="failed", device=device, room=self.dev_room[device],
                                  node=node, by=cmd.get("by"), by_label=meta["by_label"], why=meta["why"],
                                  short=fail, change=f"{self.state_label(device, st)} (unchanged)",
@@ -316,15 +372,16 @@ class House:
                 continue
             time.sleep(random.uniform(0.2, 0.6))  # network + ESP32 round trip
             latency = max(0, now_ms() - int(cmd.get("at") or now_ms()))
-            if cfg["type"] == "lock":
+            if self.is_lock(device):
                 self.open_door("web", "Owner", latency)
             else:
-                self.set_device(device, cmd["v"], cmd.get("speed"), by=cmd.get("by"), latency_ms=latency, **meta)
+                self.set_device(device, cmd["v"], cmd.get("level"), mode=cmd.get("mode"), by=cmd.get("by"),
+                                latency_ms=latency, **meta)
             self.w.ack_command(device, True)
 
     # ------------------------------------------------ door
     def open_door(self, method, who=None, latency=None, finger=None):
-        if "door_lock" not in self.dev_cfg:
+        if not self.lock_id:
             return
         titles = {"web": "Front door unlocked remotely", "exit_button": "Front door opened from inside"}
         labels = {"web": "App", "fingerprint": "Fingerprint", "keypad": "Keypad", "exit_button": "Exit button"}
@@ -336,7 +393,7 @@ class House:
                      "keypad": "Someone with the PIN", "exit_button": "Someone at home"}
         self.failed_door = 0
         self.w.log_access(method, True, who)
-        self.set_device("door_lock", 1, source=method, src_label=labels[method], group="door", kind="door",
+        self.set_device(self.lock_id, 1, source=method, src_label=labels[method], group="door", kind="door",
                         title=titles.get(method, "Front door unlocked"), short=shorts[method], why=whys[method],
                         by_label=by_labels[method], change="Locked → Unlocked → Locked (5 s)",
                         latency_ms=latency or random.randint(150, 700), tags=["door"] + (["manual"] if method == "web" else []))
@@ -359,7 +416,7 @@ class House:
         self.w.log_access(method, False)
         self.w.log_event("door", "door", f"{what} at the front door", method,
                          "Keypad" if method == "keypad" else "Fingerprint", result="denied",
-                         device="door_lock", room="entrance", node="door", by_label="Unknown",
+                         device=self.lock_id, room=self.dev_room.get(self.lock_id, "entrance"), node="door", by_label="Unknown",
                          short="Door stayed locked", why=f"{what} (attempt {n} of {limit})",
                          change="No change", tags=["door"])
         if n < limit:
@@ -371,7 +428,7 @@ class House:
         secs = self.th.get("door_lockout_s", 60)
         self.door["lockout_until"] = now_ms() + secs * 1000
         self.w.log_event("door", "door", "Keypad locked", "keypad", "Keypad", result="failed",
-                         device="door_lock", room="entrance", node="door", by_label="Unknown",
+                         device=self.lock_id, room=self.dev_room.get(self.lock_id, "entrance"), node="door", by_label="Unknown",
                          short=f"{limit} wrong PINs · locked {secs} s", why=f"{limit} wrong attempts in a row",
                          change=f"Keypad blocked for {secs} s", tags=["door", "security"])
         self.w.push_alert("critical", "Someone is trying to get in", f"Front door · keypad · {limit} wrong PINs",
@@ -381,7 +438,7 @@ class House:
         self.entrance_motion()
 
     def door_activity(self):
-        if "door" in self.offline or "door_lock" not in self.dev_cfg:
+        if "door" in self.offline or not self.lock_id:
             return
         r = random.random()
         if r < 0.45:
@@ -427,6 +484,7 @@ class House:
         self.ai_pause = new
 
     def apply_rules(self):
+        """Per-device rules from config (device.rules), only for devices with control.rules = true."""
         t = time.time()
         th = self.th
         for rid, room in self.config["rooms"].items():
@@ -438,13 +496,14 @@ class House:
             else:
                 self.empty_since.setdefault(rid, t)
             for dev, cfg in (room.get("devices") or {}).items():
-                st = self.devices[dev]
-                if cfg["type"] in ("lock", "washer"):
+                if not self.writable(dev) or not self.ctrl(dev).get("rules"):
                     continue
+                st, r = self.devices[dev], self.drules(dev)
                 empty_min = th["empty_room_off_min"]
                 empty_for = t - self.empty_since.get(rid, t)
                 rule = dict(source="rule", src_label="Rule", group="rule", by_label="Automation", tags=["rule"])
-                if st["v"] and not self.user_paused(dev) and empty_for > empty_min * 60 / self.speedup:
+                if r.get("off_when_empty") and st["v"] and not self.user_paused(dev) \
+                        and empty_for > empty_min * 60 / self.speedup:
                     saved = round(cfg.get("watts", 0) * empty_min / 60 * 2, 1)
                     self.set_device(dev, 0, short=f"Empty for {empty_min} min · saved {saved} Wh",
                                     why=f'Rule "Turn off after empty for {empty_min} min"', saved_wh=saved, **rule)
@@ -452,34 +511,78 @@ class House:
                                       f"{room['name']} · empty for {empty_min} min · saved {saved} Wh", "energy")
                 elif self.paused(dev) or not s.get("occ"):
                     continue
-                elif cfg["type"] == "light" and not st["v"] and s.get("lux", 999) < th["light_on_lux"]:
-                    self.set_device(dev, 1, short=f"Light below {th['light_on_lux']} lx",
-                                    why=f'Rule "Lights on below {th["light_on_lux"]} lx" · light {s.get("lux")} lx · someone in the room', **rule)
-                elif cfg["type"] == "fan" and not st["v"] and s.get("temp", 0) > th["fan_on_temp"]:
-                    self.set_device(dev, 1, 70, short=f"Above {th['fan_on_temp']}°C",
-                                    why=f'Rule "Fan on above {th["fan_on_temp"]}°C" · room {s.get("temp")}°C · someone in the room', **rule)
-                elif cfg["type"] == "fan" and st["v"] and s.get("temp", 99) < th["fan_off_temp"]:
+                elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"]:
+                    self.set_device(dev, 1, self.mid_level(dev), short=f"Light below {th['light_on_lux']} lx",
+                                    why=f'Rule "On below {th["light_on_lux"]} lx" · light {s.get("lux")} lx · someone in the room', **rule)
+                elif r.get("follow_temp") and not st["v"] and s.get("temp", 0) > th["fan_on_temp"]:
+                    self.set_device(dev, 1, self.mid_level(dev), short=f"Above {th['fan_on_temp']}°C",
+                                    why=f'Rule "On above {th["fan_on_temp"]}°C" · room {s.get("temp")}°C · someone in the room', **rule)
+                elif r.get("follow_temp") and st["v"] and s.get("temp", 99) < th["fan_off_temp"]:
                     self.set_device(dev, 0, short=f"Below {th['fan_off_temp']}°C",
-                                    why=f'Rule "Fan off below {th["fan_off_temp"]}°C" · room {s.get("temp")}°C', **rule)
-        if self.lock_at and t >= self.lock_at and "door_lock" in self.dev_cfg:
+                                    why=f'Rule "Off below {th["fan_off_temp"]}°C" · room {s.get("temp")}°C', **rule)
+        if self.lock_at and t >= self.lock_at and self.lock_id:
             self.lock_at = None
-            st = self.devices["door_lock"]
+            st = self.devices[self.lock_id]
             st.update(v=0, at=now_ms())
-            self.w.patch_device("door_lock", st)
+            self.w.patch_device(self.lock_id, st)
+
+    # ------------------------------------------------ monitor-only devices (power: "read")
+    def simulate_monitored(self):
+        """Devices we only READ (TV, fridge, ...): their on/off comes from the current they draw.
+        Here we fake that current; on the Pi it comes from the INA226 (on when watts > hw.on_above_w)."""
+        h = datetime.now().hour
+        for dev, cfg in self.dev_cfg.items():
+            if self.writable(dev) or self.is_lock(dev) or self.node_of(dev) in self.offline:
+                continue
+            st, rid = self.devices[dev], self.dev_room[dev]
+            occ = self.rooms.get(rid, {}).get("occ", 0)
+            icon = self.icon(dev)
+            # this runs every state tick (5 s, or 0.5 s with --fast) — keep changes rare and "sticky"
+            if icon == "fridge":     # always on; a rare power cut, back after a few minutes
+                want = (0 if random.random() < 0.0004 * self.speedup else 1) if st["v"] else \
+                       (1 if random.random() < 0.01 * self.speedup else 0)
+            elif icon == "tv":       # evenings, when someone is in the room
+                target = 1 if occ and (h >= 18 or h < 1) else 0
+                want = target if random.random() < 0.01 * self.speedup else st["v"]
+            else:
+                want = 1 - st["v"] if random.random() < 0.002 * self.speedup else st["v"]
+            if want != st["v"]:
+                self.set_device(dev, want, source="system", src_label="Sensor", group="system",
+                                by_label="Power sensor (INA226)", short="Detected from the current it draws",
+                                why=f"Power {'above' if want else 'below'} {cfg.get('hw', {}).get('on_above_w', 0.5)} W",
+                                tags=["system", "monitor"])
+                if want:
+                    self.off_alerted.discard(dev)
+            limit = self.drules(dev).get("alert_if_off_min")
+            if limit and not st["v"] and dev not in self.off_alerted \
+                    and (now_ms() - st.get("at", now_ms())) / 60000 > limit / self.speedup:
+                self.off_alerted.add(dev)
+                self.w.push_alert("warning", f"{self.label(dev)} stopped",
+                                  f"{self.room_name(rid)} · no power for {limit} min", "energy")
+                self.w.log_event("alert", "system", f"{self.label(dev)} stopped", "system", "System", result="failed",
+                                 device=dev, room=rid, node=self.node_of(dev), by_label="Power sensor (INA226)",
+                                 short=f"Off for more than {limit} min", why="It should always be running",
+                                 tags=["system", "alert"])
 
     # ------------------------------------------------ AI (same decision rules as ai/smart_home_ai.py)
     def run_ai(self):
+        """Every device with control.ai = true takes part. Fans/ACs react to temperature, lights to darkness,
+        anything else to presence. Monitor-only devices in the same room count as presence hints (TV on)."""
         decisions = []
         act, suggest = self.th["ai_act_at"], self.th["ai_suggest_at"]
         open_sugg = {s.get("device") for s in self.w.get_suggestions().values() if not s.get("response")}
         for dev, cfg in self.dev_cfg.items():
-            if cfg["type"] not in ("fan", "light"):
+            if not self.writable(dev) or not self.ctrl(dev).get("ai"):
                 continue
             rid = self.dev_room[dev]
             room = self.rooms[rid]
             temp = room.get("temp", 26)
-            p = 0.15 + 0.5 * room.get("occ", 0) + (0.25 if cfg["type"] == "fan" and temp > 27.5 else 0) \
-                + (0.2 if cfg["type"] == "light" and room.get("lux", 999) < 200 else 0)
+            icon = self.icon(dev)
+            thermal, lighting = icon in ("fan", "ac") or self.drules(dev).get("follow_temp"), icon == "light"
+            hint = any(self.devices[o]["v"] for o in self.dev_cfg
+                       if self.dev_room[o] == rid and not self.writable(o) and not self.is_lock(o))
+            p = 0.15 + 0.5 * room.get("occ", 0) + (0.25 if thermal and temp > 27.5 else 0) \
+                + (0.2 if lighting and room.get("lux", 999) < 200 else 0) + (0.1 if hint else 0)
             p = round(min(0.97, max(0.03, p + random.gauss(0, 0.08))), 2)
             pct = round(p * 100)
             when = datetime.now() + timedelta(minutes=random.choice([15, 30, 45, 60]))
@@ -487,23 +590,26 @@ class House:
                  "time": hhmm(when), "action": "none"}
             st = self.devices[dev]
             label = self.label(dev)
+            rname = self.room_name(rid).lower()
             if self.paused(dev):
                 d["action"] = "paused_by_override"
             elif st["v"] and p >= act:
                 d.update(action="keep_on", title=f"{label} stays on",
-                         why=(f"After sunset you usually stay in the {self.room_name(rid).lower()} until 22:30."
-                              if cfg["type"] == "light" else
-                              f"The room is {temp}°C and you are usually here now."))
+                         why=(f"After sunset you usually stay in the {rname} until 22:30." if lighting else
+                              f"The room is {temp}°C and you are usually here now." if thermal else
+                              f"You usually keep it on at this time."))
             elif not st["v"] and p >= act:
                 d.update(action="schedule_on", execute_at=when.isoformat(timespec="minutes"),
                          title=f"{label} turns on",
-                         why=(f"Pre-cooling: the {self.room_name(rid).lower()} is {temp}°C and you usually move there by "
-                              f"{hhmm(when + timedelta(minutes=15))}." if cfg["type"] == "fan" else
-                              f"It gets dark around then and you are usually in the {self.room_name(rid).lower()}."))
+                         why=(f"Pre-cooling: the {rname} is {temp}°C and you usually move there by "
+                              f"{hhmm(when + timedelta(minutes=15))}." if thermal else
+                              f"It gets dark around then and you are usually in the {rname}." if lighting else
+                              f"You usually turn it on around {hhmm(when)}."))
                 if self.node_of(dev) not in self.offline and random.random() < 0.5:
-                    self.set_device(dev, 1, 70 if cfg["type"] == "fan" else None, source="ai",
+                    self.set_device(dev, 1, self.mid_level(dev), source="ai",
                                     src_label=f"AI · {pct}%", group="ai", by_label="AI (Gradient Boosting)",
-                                    short="Pre-cooling before you got here" if cfg["type"] == "fan" else "Getting dark",
+                                    short="Pre-cooling before you got here" if thermal else
+                                    "Getting dark" if lighting else "Your usual time",
                                     why=f"{d['why']} · {pct}% sure", confidence=p, tags=["ai"])
             elif not st["v"] and p >= suggest and dev not in open_sugg:
                 d["action"] = "suggest_on"
@@ -512,8 +618,8 @@ class House:
             elif st["v"] and p <= 1 - act and dev not in open_sugg:
                 d["action"] = "suggest_off"
                 self.w.push_suggestion(dev, "off", 1 - p, f"Turn off the {label.lower()}?",
-                                       "The room is cooling down and it is usually off by now" if cfg["type"] == "fan"
-                                       else f"Nobody has been in the {self.room_name(rid).lower()} for a while")
+                                       "The room is cooling down and it is usually off by now" if thermal
+                                       else f"Nobody has been in the {rname} for a while")
             decisions.append(d)
         self.w.write_ai_schedule(decisions)
 
@@ -550,8 +656,9 @@ class House:
             self.w.log_event("config", "system", f"Device added: {c['name']}" if ok else f"Adding {c['name']} failed",
                              "web", "App", result="ok" if ok else "failed", device=dev, room=self.dev_room[dev],
                              node=node, by_label="Owner (web app)",
-                             why="Settings · add device · " + (f"INA226 {c['ina']}" if c.get("ina") else "no power sensor"),
-                             short=f"{node} node · GPIO {c['pin']}" if ok else f"The {node} node didn't confirm",
+                             why="Settings · add device · " + (f"INA226 {c['hw']['ina']}" if c.get("hw", {}).get("ina") else "no power sensor"),
+                             short=(f"{node} node" + (f" · GPIO {c['hw']['pin']}" if c.get("hw", {}).get("pin") is not None else " · monitor only"))
+                             if ok else f"The {node} node didn't confirm",
                              change=(f"Config v{old['version']} → v{cfg['version']} · node confirmed" if ok
                                      else "Config not confirmed"), latency_ms=1400 if ok else 10000,
                              tags=["manual", "system"])
@@ -563,10 +670,14 @@ class House:
     # ------------------------------------------------ random life: buttons, entrance motion
     def random_life(self):
         if random.random() < 0.3:  # someone presses a wall button
-            dev = random.choice([d for d, c in self.dev_cfg.items() if c["type"] != "lock"])
+            choices = [d for d in self.dev_cfg if self.writable(d) and self.ctrl(d).get("button")]
+            if not choices:
+                return
+            dev = random.choice(choices)
             node = self.node_of(dev)
             if node not in self.offline:
-                self.set_device(dev, 0 if self.devices[dev]["v"] else 1, source="button", src_label="Button",
+                self.set_device(dev, 0 if self.devices[dev]["v"] else 1, None if self.devices[dev]["v"] else self.mid_level(dev),
+                                source="button", src_label="Button",
                                 group="manual", by_label="Someone at home (button)",
                                 short=f"Wall button in the {self.room_name(self.dev_room[dev]).lower()}",
                                 why=f"Physical button on the {node} node", tags=["manual"])
@@ -589,8 +700,9 @@ class House:
             devs = room.get("devices") or {}
             data = {k: v for k, v in s.items() if k in ("temp", "hum", "lux", "occ")}
             data["watts"] = round(sum(self.devices[d]["watts"] for d in devs), 2)
-            if devs:
-                data["dev"] = {d: self.devices[d]["v"] for d in devs}
+            dv = {d: self.devices[d]["v"] for d in devs if not self.is_lock(d)}
+            if dv:
+                data["dev"] = dv
             self.w.write_summary(rid, ts, data)
         day = day_key()
         if day != self.energy_day:          # midnight rollover
@@ -628,6 +740,7 @@ class House:
                     self.last["state"] = t
                     self.sync_ai_pause()
                     self.update_sensors()
+                    self.simulate_monitored()
                     self.apply_rules()
                     self.write_state(self.update_power(dt if dt < 60 else 0))
                 else:
@@ -698,7 +811,7 @@ def main():
         if uid:
             print(f"owner login: {OWNER_EMAIL} / {OWNER_PASSWORD}")
     backfill_energy(w, config)
-    write_ai_insights(w)
+    write_ai_insights(w, config)
     house = House(w, config, args)
     house.update_sensors()
     house.run_ai()

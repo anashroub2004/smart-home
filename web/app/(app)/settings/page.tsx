@@ -6,7 +6,8 @@ import { useAuth } from "@/lib/auth";
 import type { Thresholds } from "@/lib/contract";
 import { setPref, setThreshold, useConfig, useConnected, useHomeState, useNodes, usePrefs } from "@/lib/home";
 import { timeAgo } from "@/lib/format";
-import { allDevices, C } from "@/lib/view";
+import { allDevices, C, controlSummary, sortedRooms } from "@/lib/view";
+import { DeviceIcon } from "@/components/DeviceIcon";
 
 const RULES: { key: keyof Thresholds; label: string; unit: string; step: number; min: number; max: number }[] = [
   { key: "fan_on_temp", label: "Fan on above", unit: "°C", step: 0.5, min: 22, max: 35 },
@@ -34,7 +35,7 @@ export default function SettingsPage() {
     }),
     { name: "Cloud sync (Firebase)", state: connected ? "Synced" : "Reconnecting…", ok: connected },
   ];
-  const devices = allDevices(config).filter((d) => d.cfg.type !== "lock");
+  const devices = allDevices(config).filter((d) => !d.cfg.caps?.lock);
   const waste = prefs?.notify?.waste ?? true;
   const ai = prefs?.notify?.ai ?? true;
 
@@ -67,16 +68,37 @@ export default function SettingsPage() {
             const learning = !!d.cfg.added_at && Date.now() - d.cfg.added_at < LEARNING_MS;
             return (
               <div key={d.id} className="list-row">
-                <span style={{ flex: 1 }}>
+                <span className="ev-ic" style={{ width: 32, height: 32 }}><DeviceIcon type={d.cfg.icon} size={16} /></span>
+                <span style={{ flex: 1, minWidth: 0 }}>
                   {d.cfg.name}
-                  <div className="muted" style={{ fontSize: 12.5 }}>{d.room.name}{learning ? " · learning" : ""}</div>
+                  <div className="muted" style={{ fontSize: 12.5 }}>
+                    {d.room.name} · {controlSummary(d.cfg)}{learning ? " · learning" : ""}
+                  </div>
                 </span>
                 <span className="muted num" style={{ fontSize: 13, textAlign: "right" }}>
-                  {d.node} · GPIO {d.cfg.pin}{d.cfg.ina ? ` · ${d.cfg.ina}` : ""}
+                  {d.node}{d.cfg.hw.pin !== undefined ? ` · GPIO ${d.cfg.hw.pin}` : ""}{d.cfg.hw.ina ? ` · ${d.cfg.hw.ina}` : ""}
                 </span>
               </div>
             );
           })}
+        </div>
+      </section>
+
+      <section className="card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <h2 className="h-label" style={{ margin: 0 }}>Rooms</h2>
+          <Link href="/settings/add-room" className="btn" style={{ minHeight: 36 }}>+ Add room</Link>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          {sortedRooms(config).map(([id, r]) => (
+            <div key={id} className="list-row">
+              <span style={{ flex: 1 }}>
+                {r.name}
+                <div className="muted" style={{ fontSize: 12.5 }}>{(r.hardware ?? []).join(" · ") || "No sensors"}</div>
+              </span>
+              <span className="muted num" style={{ fontSize: 13 }}>{r.node} node · {Object.keys(r.devices ?? {}).length} devices</span>
+            </div>
+          ))}
         </div>
       </section>
 

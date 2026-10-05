@@ -2,30 +2,59 @@
 
 import type { Alert, DeviceConfig, DeviceState, EventGroup, HomeConfig, RoomConfig } from "./contract";
 
-export const SPEEDS = { Low: 40, Medium: 70, High: 100 } as const;
+// ---------------------------------------------------------------- capabilities
 
-export function speedName(v?: number): keyof typeof SPEEDS {
-  const s = v ?? 70;
-  return s >= 100 ? "High" : s >= 70 ? "Medium" : "Low";
+export const canSwitch = (cfg: DeviceConfig) => cfg.caps.power === "write" || !!cfg.caps.lock;
+/** Can the person tap it in the app? (monitor-only devices and app:false devices can't) */
+export const appControllable = (cfg: DeviceConfig) => canSwitch(cfg) && cfg.control.app;
+export const isMonitorOnly = (cfg: DeviceConfig) => !cfg.caps.lock && cfg.caps.power !== "write";
+export const isLock = (cfg: DeviceConfig) => !!cfg.caps.lock;
+
+/** Label for a level value, using the device's own steps ("Medium", "Bright", "50%"). */
+export function levelLabel(cfg: DeviceConfig, value?: number): string | null {
+  const lv = cfg.caps.level;
+  if (!lv) return null;
+  const v = value ?? lv.steps[Math.floor(lv.steps.length / 2)];
+  let best = 0;
+  lv.steps.forEach((s, i) => {
+    if (Math.abs(s - v) < Math.abs(lv.steps[best] - v)) best = i;
+  });
+  return lv.labels[best] ?? `${v}%`;
 }
+
+export const defaultLevel = (cfg: DeviceConfig) => {
+  const s = cfg.caps.level?.steps;
+  return s ? s[Math.floor(s.length / 2)] : undefined;
+};
 
 export function deviceWatts(cfg: DeviceConfig, st?: DeviceState): number {
   if (!st?.v) return 0;
   if (st.watts !== undefined) return st.watts;
-  return cfg.type === "fan" ? (cfg.watts * (st.speed ?? 70)) / 100 : cfg.watts;
+  return cfg.caps.level ? (cfg.watts * (st.level ?? 70)) / 100 : cfg.watts;
 }
 
 /** Text under the device name on a tile — same wording as the prototype. */
 export function tileState(cfg: DeviceConfig, st: DeviceState | undefined, offline: boolean, pending: boolean): string {
   if (offline) return "Not responding";
   if (pending) return "Updating…";
-  if (cfg.type === "lock") return st?.v ? "Unlocked" : "Locked";
+  if (isLock(cfg)) return st?.v ? "Unlocked" : "Locked";
   if (!st?.v) return "Off";
-  const w = deviceWatts(cfg, st).toFixed(1) + " W";
-  if (cfg.type === "fan") return `${speedName(st.speed)} · ${w}`;
-  if (cfg.type === "washer") return `Running · ${w}`;
-  return `On · ${w}`;
+  const w = cfg.caps.energy === "none" ? "" : ` · ${deviceWatts(cfg, st).toFixed(1)} W`;
+  if (cfg.caps.level) return `${levelLabel(cfg, st.level)}${w}`;
+  if (cfg.caps.mode && st.mode) return `${st.mode}${w}`;
+  if (cfg.caps.status) return `${st.status ?? "Running"}${w}`;
+  return `On${w}`;
 }
+
+/** "App · Button · Rules · AI" or "Monitor only" */
+export function controlSummary(cfg: DeviceConfig): string {
+  if (isMonitorOnly(cfg)) return "Monitor only";
+  const c = cfg.control;
+  const parts = [c.app && "App", c.button && "Button", c.rules && "Rules", c.ai && "AI"].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "No one";
+}
+
+// ---------------------------------------------------------------- lookup
 
 export interface DeviceRef {
   id: string;
@@ -38,7 +67,9 @@ export interface DeviceRef {
 }
 
 export function deviceLabel(cfg: DeviceConfig, room: RoomConfig): string {
-  return cfg.type === "washer" || cfg.type === "lock" ? cfg.name : `${room.name} ${cfg.name.toLowerCase()}`;
+  if (cfg.icon === "washer" || cfg.icon === "lock" || cfg.name.toLowerCase().startsWith(room.name.toLowerCase())) return cfg.name;
+  const n = cfg.name === cfg.name.toUpperCase() ? cfg.name : cfg.name.toLowerCase(); // keep "TV", "AC"
+  return `${room.name} ${n}`;
 }
 
 export function findDevice(config: HomeConfig | null, id: string): DeviceRef | null {
@@ -67,6 +98,14 @@ export function sortedRooms(config: HomeConfig | null, includeHidden = false): [
 }
 
 export const hasClimate = (r: RoomConfig) => (r.sensors ?? []).includes("temp");
+
+/** "kitchen_light", "kitchen_light_2", … */
+export function slugId(base: string, taken: (id: string) => boolean): string {
+  const clean = base.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "device";
+  let id = clean;
+  for (let n = 2; taken(id); n++) id = `${clean}_${n}`;
+  return id;
+}
 
 // ---------------------------------------------------------------- colours (prototype values)
 

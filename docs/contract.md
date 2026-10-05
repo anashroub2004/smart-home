@@ -26,33 +26,65 @@
 | `/prefs` | الويب | تفضيلات الإشعارات |
 | `/users/{uid}` | يدوي | `{ role: "owner", name }` |
 
-## `/config` (مختصر — المثال الكامل في `docs/seed.json`)
+## `/config` (المثال الكامل في `docs/seed.json`)
 
 ```json
 {
-  "schema": 2, "version": 1, "home_name": "My Studio",
+  "schema": 3, "version": 1, "home_name": "My Studio",
   "nodes": { "living": { "name": "Living room & kitchen node", "reserved_pins": [16,17,21,22,34,35], "i2c": ["0x44","0x23"] } },
   "rooms": {
     "living": {
       "name": "Living room", "node": "living", "order": 1,
       "sensors": ["temp","hum","lux","occ"],
       "hardware": ["C1001 mmWave","PIR","SHT31","BH1750","INA226"],
-      "devices": { "living_fan": { "type": "fan", "name": "Fan", "pin": 25, "button": 32, "ina": "0x40", "watts": 2.4 } }
+      "devices": { "living_fan": { ...انظر "نموذج الجهاز" أدناه... } }
     },
-    "entrance": { "name": "Entrance", "node": "door", "hidden": true, "devices": { "door_lock": { "type": "lock", "name": "Front door", "pin": 18, "watts": 0 } } }
+    "entrance": { "name": "Entrance", "node": "door", "hidden": true, "devices": { "door_lock": { ... } } }
   },
   "thresholds": { "fan_on_temp": 28, "fan_off_temp": 26.5, "light_on_lux": 150, "empty_room_off_min": 10,
                   "ai_act_at": 0.8, "ai_suggest_at": 0.6, "override_pause_min": 120,
                   "door_lockout_attempts": 5, "door_lockout_s": 60 },
-  "scenes": { "away": { "name": "Away", "order": 2, "set": { "living_fan": 0 } },
-              "sleep": { "name": "Sleep", "order": 3, "set": { "bedroom_fan": { "v": 1, "speed": 40 } } } },
-  "fingerprints": { "1": "Owner", "2": "Fares" }
+  "scenes": { "sleep": { "name": "Sleep", "order": 3, "set": { "bedroom_fan": { "v": 1, "level": 40 } } } }
 }
 ```
 
-- `schema`: إذا تغيّر شكل البيانات نرفعه، والمحاكي يعيد التهيئة تلقائياً.
-- جهاز جديد من شاشة Add device يحمل `added_at`، فتعرض الواجهة "AI is learning" لثلاثة أسابيع.
-- سرعات المروحة: Low = 40، Medium = 70، High = 100.
+## نموذج الجهاز (Capabilities) — أي جهاز، بدون كود
+
+كل جهاز يصف **ماذا يستطيع** و**من يُسمح له**. الواجهة والمحاكي والـ Pi والذكاء الاصطناعي يقرؤون هذا الوصف — لا توجد أنواع ثابتة في الكود.
+
+```json
+"living_fan": {
+  "name": "Fan", "icon": "fan", "template": "fan",
+  "caps":    { "power": "write", "level": { "steps": [40,70,100], "labels": ["Low","Medium","High"] }, "energy": "ina" },
+  "control": { "app": true, "button": true, "rules": true, "ai": true },
+  "rules":   { "off_when_empty": true, "follow_temp": true },
+  "hw":      { "out": "pwm", "pin": 25, "button": 32, "ina": "0x40" },
+  "watts": 2.4,
+  "added_at": 1759300000000
+}
+```
+
+| الحقل | القيم | المعنى |
+|---|---|---|
+| `caps.power` | `write` · `read` | **الحد الأدنى لكل جهاز.** `write` = نتحكم به، `read` = مراقبة فقط (نعرف حالته من التيار) |
+| `caps.energy` | `ina` · `estimate` · `none` | قراءة الاستهلاك: INA226، أو تقدير من `watts`، أو لا شيء |
+| `caps.level` | `{steps, labels}` | سرعة / تعتيم (اختياري) |
+| `caps.mode` | `{options}` | أوضاع مثل Cool/Heat (اختياري) |
+| `caps.status` | `true` | حالة نصية مثل Running (اختياري) |
+| `caps.lock` | `{open_s}` | قفل يفتح مؤقتاً (الباب) |
+| `control.app/button/rules/ai` | `true/false` | من يُسمح له بالتغيير. جهاز مراقبة = كلها `false` |
+| `control.confirm` | `true` | يطلب تأكيداً قبل التنفيذ |
+| `rules.off_when_empty` | | يُطفأ بعد فراغ الغرفة `empty_room_off_min` دقيقة |
+| `rules.on_when_dark` | | يعمل عند الظلام ووجود شخص (`light_on_lux`) |
+| `rules.follow_temp` | | يعمل فوق `fan_on_temp` ويُطفأ تحت `fan_off_temp` |
+| `rules.alert_if_off_min` | رقم | للمراقبة: تنبيه إذا توقف أكثر من N دقيقة (ثلاجة) |
+| `hw.out` | `relay` · `pwm` · `ir` · `servo` · `none` | كيف تشغّله العقدة |
+| `hw.pin` / `hw.button` / `hw.ina` | | طرف الخرج / زر الحائط / عنوان INA226 |
+| `hw.on_above_w` | رقم | للمراقبة: يعتبر "يعمل" فوق هذه القدرة |
+| `icon` | `fan` `light` `washer` `lock` `tv` `fridge` `ac` `heater` `pump` `plug` `generic` | الشكل فقط — أي قيمة جديدة تظهر بأيقونة عامة |
+
+**الذكاء الاصطناعي:** كل جهاز `power: write` + `control.ai: true` يحصل على نموذج خاص تلقائياً.
+الأجهزة `power: read` في نفس الغرفة تدخل كمعلومات إضافية (مثلاً: التلفاز يعمل ← هناك شخص).
 
 ## `/home_state`
 
@@ -61,18 +93,20 @@
   "updated_at": 1759300000000, "power_w": 10.6, "base_w": 6.8, "scene": "home",
   "door": { "lockout_until": 0, "last_open": { "at": 1759299000000, "method": "fingerprint", "who": "Fares" } },
   "rooms": { "living": { "temp": 27.4, "hum": 48, "lux": 120, "occ": 1, "occ_since": 1759299000000, "occ_by": "mmwave" } },
-  "devices": { "living_fan": { "v": 1, "speed": 70, "src": "ai", "at": 1759299000000, "watts": 1.7 } }
+  "devices": { "living_fan": { "v": 1, "level": 70, "src": "ai", "at": 1759299000000, "watts": 1.7 },
+    "kitchen_ac": { "v": 1, "mode": "Cool", "src": "web", "watts": 880 },
+    "washer":     { "v": 1, "status": "Running", "src": "button", "watts": 3.5 } }
 }
 ```
 
 ## `/commands/{device}`
 
 ```json
-{ "v": 1, "speed": 70, "by": "<uid>", "at": 1759300000000, "status": "pending" }
+{ "v": 1, "level": 70, "by": "<uid>", "at": 1759300000000, "status": "pending" }
 ```
 
-اختياري: `scene` (أمر من مشهد)، `via: "suggestion"` + `confidence` (المستخدم وافق على اقتراح AI).
-الـ Pi ينفذ ثم يغيّر `status` إلى `done` أو `failed` (+ `error`). بعد 10 ثوانٍ بدون رد يعرض الويب "didn't respond".
+اختياري: `level` و `mode` (حسب قدرات الجهاز)، `scene` (أمر من مشهد)، `via: "suggestion"` + `confidence` (المستخدم وافق على اقتراح AI).
+الـ Pi يرفض الأمر إذا كان الجهاز `power: read` أو `control.app: false`. وإلا ينفذ ثم يغيّر `status` إلى `done` أو `failed` (+ `error`). بعد 10 ثوانٍ بدون رد يعرض الويب "didn't respond".
 
 ## `/events/{pushId}` — السجل الكامل
 
@@ -83,7 +117,7 @@
   "source": "ai", "src_label": "AI · 86%", "by_label": "AI (Gradient Boosting)",
   "why": "Predicted you would be home and the room above 28°C · 86% sure",
   "change": "Off → On · Medium", "device": "living_fan", "room": "living", "node": "living",
-  "confidence": 0.86, "from": { "v": 0 }, "to": { "v": 1, "speed": 70 },
+  "confidence": 0.86, "from": { "v": 0 }, "to": { "v": 1, "level": 70 },
   "result": "ok", "latency_ms": 700, "tags": ["ai"]
 }
 ```
@@ -138,8 +172,9 @@
 | Topic | الاتجاه | مثال |
 |---|---|---|
 | `home/<room>/<sensor>` | ESP32 → Pi | `home/living/temp` → `29.1` |
-| `home/<room>/<device>/state` | ESP32 → Pi | `{"v":1,"speed":70,"src":"button"}` |
-| `home/<room>/<device>/set` | Pi → ESP32 | `{"v":1,"speed":70}` |
+| `home/<room>/<device>/state` | ESP32 → Pi | `{"v":1,"level":70,"src":"button"}` |
+| `home/<room>/<device>/set` | Pi → ESP32 | `{"v":1,"level":70}` أو `{"v":1,"mode":"Cool"}` |
+| `home/<room>/<device>/power` | ESP32 → Pi | `{"w":2.9}` — قراءة INA226 (لكل الأجهزة، ومنها تُستنتج حالة أجهزة المراقبة) |
 | `home/door/event` | ESP32 → Pi | `{"type":"fingerprint","ok":true,"id":2}` |
 | `home/door/open` | Pi → ESP32 | `{}` |
 | `home/<node>/status` | LWT | `online` / `offline` (retained) |

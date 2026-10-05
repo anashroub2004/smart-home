@@ -1,16 +1,66 @@
 // Types for every Firebase path. Mirrors docs/contract.md — change both together.
 
-export type DeviceType = "fan" | "light" | "washer" | "lock";
+/** Icon / visual family. Free to extend — the UI falls back to a generic icon. */
+export type DeviceIconName =
+  | "fan" | "light" | "washer" | "lock" | "tv" | "fridge" | "ac" | "heater" | "pump" | "plug" | "generic";
+
+/**
+ * What a device CAN do. Every device has at least `power` (control or read) and `energy`.
+ *  power  "write" = we can switch it, "read" = we only see whether it is on (monitor only)
+ *  level  speed / brightness steps, e.g. [40,70,100] with labels Low/Medium/High
+ *  mode   a choice from a list (e.g. air conditioner Cool/Heat/Fan)
+ *  status a text state shown on the tile (washer: Running)
+ *  lock   momentary unlock (door) — opens for open_s seconds
+ *  energy "ina" = measured by an INA226, "estimate" = from rated watts, "none"
+ */
+export interface DeviceCaps {
+  power?: "write" | "read";
+  level?: { steps: number[]; labels: string[] };
+  mode?: { options: string[] };
+  status?: boolean;
+  lock?: { open_s: number };
+  energy: "ina" | "estimate" | "none";
+}
+
+/** WHO may change it. Monitor-only devices have everything false. */
+export interface DeviceControl {
+  app: boolean; // the web app
+  button: boolean; // a wall button on the node
+  rules: boolean; // automation rules
+  ai: boolean; // the AI model (only ever switches ON)
+  confirm?: boolean; // ask "are you sure?" first (door)
+}
+
+/** Which automation rules apply (only if control.rules is true). */
+export interface DeviceRules {
+  off_when_empty?: boolean; // turn off after the room is empty for thresholds.empty_room_off_min
+  on_when_dark?: boolean; // turn on when someone is there and light < thresholds.light_on_lux
+  follow_temp?: boolean; // on above thresholds.fan_on_temp, off below fan_off_temp
+  alert_if_off_min?: number; // monitor: alert if it is off longer than this (fridge)
+}
+
+export interface DeviceHw {
+  out?: "relay" | "pwm" | "servo" | "ir" | "none"; // how the node drives it
+  pin?: number; // output GPIO
+  button?: number; // wall button GPIO
+  ina?: string; // INA226 I2C address, e.g. "0x40"
+  on_above_w?: number; // monitor-only: considered ON above this power
+}
 
 export interface DeviceConfig {
-  type: DeviceType;
   name: string;
-  pin: number;
-  button?: number;
-  ina?: string; // INA226 I2C address, e.g. "0x40"
-  watts: number;
+  icon: DeviceIconName;
+  template?: string; // which template it was created from (informational)
+  caps: DeviceCaps;
+  control: DeviceControl;
+  rules?: DeviceRules;
+  hw: DeviceHw;
+  watts: number; // rated power, used for estimates
   added_at?: number; // ms — the AI is "learning" a device for ~3 weeks after this
 }
+
+/** @deprecated kept for older code paths; use DeviceConfig.icon */
+export type DeviceType = DeviceIconName;
 
 export interface RoomConfig {
   name: string;
@@ -28,7 +78,7 @@ export interface NodeConfig {
   i2c: string[];
 }
 
-export type SceneValue = number | { v: number; speed?: number };
+export type SceneValue = number | { v: number; level?: number; mode?: string };
 
 export interface SceneConfig {
   name: string;
@@ -84,7 +134,9 @@ export type Source =
 
 export interface DeviceState {
   v: 0 | 1;
-  speed?: number;
+  level?: number;
+  mode?: string;
+  status?: string;
   src?: Source;
   at?: number;
   watts?: number;
@@ -118,7 +170,8 @@ export type CommandStatus = "pending" | "done" | "failed";
 
 export interface Command {
   v: 0 | 1;
-  speed?: number;
+  level?: number;
+  mode?: string;
   by: string;
   at: number | object; // object = serverTimestamp() placeholder when writing
   status: CommandStatus;

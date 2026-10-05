@@ -3,13 +3,17 @@
 import { useRef } from "react";
 import type { DeviceConfig, DeviceState } from "@/lib/contract";
 import { useDeviceCommand } from "@/lib/home";
-import { tileState } from "@/lib/view";
+import { appControllable, defaultLevel, isLock, isMonitorOnly, tileState } from "@/lib/view";
 import { useDeviceSheet } from "./DeviceSheet";
 import { DeviceIcon } from "./DeviceIcon";
 import { IMore } from "./Icons";
 import { useToast } from "./Toast";
 
-/** Tap = on/off. ⋯ (or long-press / right-click) = device sheet. Same markup as the prototype. */
+/**
+ * Tap = on/off (only if the device can be switched from the app).
+ * Monitor-only devices show their state but can't be tapped. ⋯ / long-press / right-click = device sheet.
+ * The tile is drawn from the device's capabilities, so any new device kind works without code changes.
+ */
 export function DeviceTile({
   id,
   cfg,
@@ -28,15 +32,19 @@ export function DeviceTile({
   const sheet = useDeviceSheet();
   const press = useRef<{ timer?: ReturnType<typeof setTimeout>; long: boolean }>({ long: false });
 
+  const tappable = appControllable(cfg);
+  const monitor = isMonitorOnly(cfg);
   const pending = ui === "pending";
   const on = state?.v === 1 && !offline;
-  const cls = "tile" + (on ? " on" : "") + (pending ? " pending" : "") + (offline ? " off-line" : "") +
-    (ui === "failed" || ui === "timeout" ? " failed" : "");
+  const cls =
+    "tile" + (on ? " on" : "") + (pending ? " pending" : "") + (offline ? " off-line" : "") +
+    (ui === "failed" || ui === "timeout" ? " failed" : "") + (!tappable ? " monitor" : "");
 
-  function toggle() {
+  function tap() {
     if (press.current.long || offline || pending) return;
-    if (cfg.type === "lock") send(1);
-    else send(state?.v ? 0 : 1, cfg.type === "fan" && !state?.v ? state?.speed || 70 : undefined);
+    if (!tappable || cfg.control.confirm) return sheet.open(id); // confirm-first devices open the sheet
+    if (isLock(cfg)) send(1);
+    else send(state?.v ? 0 : 1, !state?.v && cfg.caps.level ? { level: state?.level ?? defaultLevel(cfg) } : {});
   }
   function startPress() {
     press.current.long = false;
@@ -52,10 +60,10 @@ export function DeviceTile({
       <button
         type="button"
         className={cls}
-        aria-pressed={state?.v === 1}
-        aria-label={`Turn ${label.toLowerCase()} ${state?.v ? "off" : "on"}`}
+        aria-pressed={tappable ? state?.v === 1 : undefined}
+        aria-label={tappable ? `Turn ${label.toLowerCase()} ${state?.v ? "off" : "on"}` : `${label}, ${tileState(cfg, state, offline, false)}`}
         disabled={offline}
-        onClick={toggle}
+        onClick={tap}
         onPointerDown={startPress}
         onPointerUp={endPress}
         onPointerLeave={endPress}
@@ -66,11 +74,14 @@ export function DeviceTile({
           sheet.open(id);
         }}
       >
-        <span className={`t-ic ic-${cfg.type}`}>
-          <DeviceIcon type={cfg.type} />
+        <span className={`t-ic ic-${cfg.icon}`}>
+          <DeviceIcon type={cfg.icon} />
         </span>
         <span>
-          <span className="t-name" style={{ display: "block" }}>{cfg.name}</span>
+          <span className="t-name" style={{ display: "block" }}>
+            {cfg.name}
+            {monitor && <span className="ro-badge">VIEW</span>}
+          </span>
           <span className="t-state num" style={{ display: "block" }}>
             {pending && <span className="spin" />}
             {tileState(cfg, state, offline, pending)}
