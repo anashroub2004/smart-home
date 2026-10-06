@@ -57,6 +57,16 @@ export interface DeviceConfig {
   hw: DeviceHw;
   watts: number; // rated power, used for estimates
   added_at?: number; // ms — the AI is "learning" a device for ~3 weeks after this
+  ai?: DeviceAiSettings; // optional per-device AI overrides (defaults come from caps + watts)
+}
+
+/** Optional per-device AI settings. Everything has a default (see ai/spec.py and ai/energy.py). */
+export interface DeviceAiSettings {
+  act?: number; // act threshold; default = energy-scaled from watts (1.2 W light ~0.68, 1.5 kW AC ~0.92)
+  lead_min?: number; // start early (pre-cooling); default 15 for fans/AC/heaters, 0 otherwise
+  off_after_min?: number; // smart off after confirmed vacancy; default lights 5, others 10
+  grace_min?: number; // waste guard: switch off if nobody came by target + this; default 10
+  temp_on?: number; // thermal gate; default thresholds.fan_on_temp
 }
 
 /** @deprecated kept for older code paths; use DeviceConfig.icon */
@@ -120,6 +130,8 @@ export interface RoomState {
   occ_since?: number;
   occ_by?: "mmwave" | "pir";
   motion_at?: number;
+  mmwave?: 0 | 1; // each presence sensor separately: switching OFF needs both to be empty
+  pir?: 0 | 1;
 }
 
 export type Source =
@@ -216,18 +228,65 @@ export interface HomeEvent {
 export interface AiDecision {
   device: string;
   p_on: number;
-  action: "schedule_on" | "keep_on" | "suggest_on" | "suggest_off" | "paused_by_override" | "none";
+  action: "schedule_on" | "keep_on" | "suggest_on" | "suggest_off" | "paused_by_override" | "paused_by_user" | "learning" | "none";
+  status?: "ready" | "relearning" | "learning";
   predicted_for: string;
-  time?: string; // "19:30"
+  time?: string; // "19:30" — when it will act (lights: from when it switches on as you walk in)
   title?: string;
-  why?: string;
+  why?: string; // built from the real sensor values, e.g. "Room 29.4°C · someone is home · 86% sure"
   execute_at?: string;
+  act_at?: number; // the threshold used for this device right now (energy-scaled + adaptive)
+  suggest_at?: number;
   at: number;
 }
 
+export interface AiDeviceInsight {
+  status: "ready" | "relearning" | "learning";
+  days?: number;
+  f1?: number;
+  baseline_f1?: number; // "same as yesterday" — the model must beat this
+  within_15?: number;
+  exact?: number;
+  brier?: number;
+  importance?: Record<string, number>; // feature group -> share, e.g. { time: 0.41, habit: 0.33 }
+  calibration?: [number, number, number][]; // [predicted, actual, count] per bin
+  act: number;
+  suggest: number;
+  watts: number;
+  kind: "light" | "thermal" | "generic";
+}
+
+export interface EnergyAnomaly {
+  device: string;
+  kind: "high" | "dead" | "standby";
+  watts: number;
+  usual: number;
+  at: number;
+  title?: string;
+  text?: string;
+}
+
 export interface AiInsights {
-  metrics?: { within_15: number; exact: number; retrained_at: number; model?: string; devices?: number };
+  status?: "ready" | "learning" | "off";
+  data_source?: "simulated" | "mixed" | "real"; // say so in the UI when the numbers come from simulated data
+  metrics?: {
+    within_15: number;
+    exact: number;
+    retrained_at: number;
+    model?: string;
+    devices?: number;
+    f1?: number;
+    baseline_f1?: number;
+    data_source?: "simulated" | "mixed" | "real";
+  };
   learned?: string[]; // **bold** marks numbers
+  devices?: Record<string, AiDeviceInsight>;
+  presence?: { status: string; accuracy?: number; arrival_weekday?: string | null; arrival_weekend?: string | null };
+  presence_now?: { home: boolean; p_home_60: number; at: number };
+  energy?: { wasted_wh: number; saved_by_ai_wh: number; saved_by_rules_wh: number; wasted_by_ai_wh: number; ai_net_wh: number };
+  anomalies?: EnergyAnomaly[];
+  wear?: Record<string, number>; // device -> rise of its usual power over 4 weeks (0.3 = +30%)
+  stats?: Record<string, number>; // ai_on, ai_hit, ai_miss, smart_off, suggested, accepted, dismissed, expired, skipped
 }
 
 export interface Suggestion {
@@ -238,11 +297,16 @@ export interface Suggestion {
   why: string;
   at: number;
   response?: "accept" | "dismiss";
+  expires_at?: number; // the Pi deletes the suggestion after this (or when the room changes)
   handled?: boolean;
   done_text?: string;
 }
 
 export type EnergyDay = Record<string, number>; // device -> Wh, "_base" = hub + nodes + sensors
+
+/** /energy_waste/{day}/{device}/{cause} = Wh used while the room was confirmed empty */
+export type WasteCause = "forgotten" | "rule_delay" | "ai" | "standby";
+export type EnergyWasteDay = Record<string, Partial<Record<WasteCause, number>>>;
 
 export interface AccessEntry {
   at: number;

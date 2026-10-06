@@ -25,6 +25,7 @@ import type {
   Command,
   DeviceConfig,
   EnergyDay,
+  EnergyWasteDay,
   HomeConfig,
   HomeEvent,
   HomeState,
@@ -45,6 +46,7 @@ export const PATHS = {
   events: "events",
   summaries: (room: string, day: string) => `summaries/${room}/${day}`,
   energyDaily: "energy_daily",
+  energyWaste: "energy_waste",
   aiSchedule: "ai_schedule",
   aiInsights: "ai_insights",
   aiPause: (device: string) => `ai_pause/${device}`,
@@ -104,6 +106,8 @@ export const useConfig = () => useValue<HomeConfig>(PATHS.config);
 export const useHomeState = () => useValue<HomeState>(PATHS.homeState);
 export const useNodes = () => useValue<Record<string, NodeStatus>>(PATHS.nodes);
 export const useEnergyDaily = () => useValue<Record<string, EnergyDay>>(PATHS.energyDaily);
+/** Wasted Wh per device and cause for one day ("YYYY-MM-DD"). */
+export const useEnergyWaste = (day: string) => useValue<EnergyWasteDay>(`${PATHS.energyWaste}/${day}`);
 export const useAiSchedule = () => useValue<Record<string, AiDecision>>(PATHS.aiSchedule);
 export const useAiInsights = () => useValue<AiInsights>(PATHS.aiInsights);
 export const usePrefs = () => useValue<Prefs>(PATHS.prefs);

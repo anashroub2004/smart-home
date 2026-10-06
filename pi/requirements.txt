@@ -1,4 +1,7 @@
-# The simulator against the local emulator needs NOTHING — Python 3.10+ standard library only.
+# The simulator itself needs only the Python 3.10+ standard library.
+#
+# The AI (real Gradient Boosting models — the simulator runs them too; without them it runs with --no-ai):
+-r ../ai/requirements.txt
 #
 # To write to the REAL Firebase project (sim_house.py --cloud, and later the Pi services):
 google-auth>=2.30

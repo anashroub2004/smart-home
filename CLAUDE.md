@@ -17,6 +17,8 @@
   Words/colours derived from data live in `web/lib/view.ts`.
 - `/events` is written by the Pi only. The web writes only `/commands`, `/ai_pause`, `/prefs`, `/suggestions/{id}`, `/alerts/{id}/ack`, `/config`.
 - `pi/` uses the Python standard library for the simulator; `sim_house.py` must behave like the real Pi services.
-- AI: `ai/smart_home_ai.py` (HistGradientBoosting, 60 min horizon, acts ≥0.80, suggests ≥0.60, only switches ON). Devices come from the config (control.ai).
+- AI: package `ai/` (see ai/README_AR.md + the smart-home-ai-model skill). HistGradientBoosting per device, 60 min horizon,
+  predict -> sensor gate -> waste guard -> smart off; energy-scaled + adaptive thresholds; 8-week window.
+  `ai.runtime.AIRuntime` is used by the simulator and (later) the Pi automation service. Tests: `python -m unittest discover -s ai/tests -t .`
 - Real Firebase project: `ai-home-aef50` (alias `prod` in .firebaserc; default stays the `demo-smart-home` emulator). See docs/DEPLOY.md.
 - Timezone: Asia/Hebron. Timestamps in Firebase: ms since epoch (UTC).

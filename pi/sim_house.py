@@ -9,15 +9,20 @@ Run (with the Firebase emulators already running):
     python pi/sim_house.py --fail-rate 0.3     # 30% of commands fail
     python pi/sim_house.py --lockout       # 5 wrong PINs at the door right away (security alert)
     python pi/sim_house.py --reset         # wipe the database and re-seed docs/seed.json
+    python pi/sim_house.py --fault bedroom_fan        # the fan draws 2x its usual power (AI fault detection)
+    python pi/sim_house.py --fault living_light:dead  # kinds: high (default) | dead | standby
+    python pi/sim_house.py --no-ai         # run without the AI
 
 What it does:
     - seeds /config from docs/seed.json and creates the owner login (owner@home.test / password123)
     - every tick: executes /commands (done/failed + event), writes /home_state and /nodes
     - rules: empty room -> off, dark + occupied -> lights on, hot + occupied -> fan on, cool -> fan off
-    - AI: /ai_schedule plan + /suggestions (same decision rules as ai/smart_home_ai.py)
+    - AI: the REAL model from ai/ (ai.runtime.AIRuntime) — plan every 15 min, sensor gate, waste guard,
+      smart off, suggestion expiry, energy faults, waste ledger. A fresh install gets simulated history
+      (labelled "simulated") so the models are ready on day one. Needs: pip install -r ai/requirements.txt
     - door: fingerprint / keypad / exit button / wrong PINs / lockout, entrance motion + camera clips
     - /alerts for the Activity screen, /summaries + /energy_daily every minute
-Python standard library only.
+The simulator itself uses the Python standard library; the AI needs numpy/pandas/scikit-learn.
 """
 import argparse
 import json
@@ -27,7 +32,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +40,7 @@ from firebase_writer import Writer, day_key, now_ms  # noqa: E402
 from rest_db import PROJECT_ID, RestDB  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 SEED = ROOT / "docs" / "seed.json"
 AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
@@ -108,22 +114,18 @@ def backfill_energy(w, config):
         w.write_energy_day(day, per)
 
 
-def write_ai_insights(w, config=None):
-    """What the AI service publishes after its nightly training (see ai/smart_home_ai.py train)."""
-    retrained = datetime.now().replace(hour=3, minute=0, second=0, microsecond=0)
-    if retrained > datetime.now():
-        retrained -= timedelta(days=1)
-    w.write_ai_insights({
-        "metrics": {"within_15": 0.93, "exact": 0.75, "retrained_at": int(retrained.timestamp() * 1000),
-                    "model": "Gradient Boosting",
-                    "devices": sum(1 for r in (config or {}).get("rooms", {}).values()
-                                   for d in (r.get("devices") or {}).values() if (d.get("control") or {}).get("ai"))},
-        "learned": [
-            "You usually get home around **16:30** on weekdays.",
-            "You turn the bedroom fan on most nights when the room is above **27°C**.",
-            "Living room lights stay on after sunset while someone is there.",
-        ],
-    })
+def load_ai(args):
+    """The real AI (ai/). Returns (AIRuntime class, sink class, store module) or None if it can't run here."""
+    if args.no_ai:
+        return None
+    try:
+        from ai import store as ai_store
+        from ai.dispatch import FirebaseSink
+        from ai.runtime import AIRuntime
+        return AIRuntime, FirebaseSink, ai_store
+    except ImportError as e:
+        print(f"! AI disabled ({e}). Install it with:  pip install -r ai/requirements.txt")
+        return None
 
 
 # ---------------------------------------------------------------- the house
@@ -145,6 +147,11 @@ class House:
         self.ai_pause = {}               # device -> until ms (set from the web app)
         self.off_alerted = set()         # monitor-only devices we already alerted about
         self.node_version = {}           # node -> config version it confirmed
+        self.door_entry_at = None        # last time someone came in (fingerprint / keypad / app)
+        self.away = False                # Away scene on
+        self.faults = dict(f.split(":", 1) if ":" in f else (f, "high") for f in (args.fault or []))
+        self.ai = None                   # ai.runtime.AIRuntime (the real model) — set by start_ai()
+        self.next_train = 0
         # the real Firebase free plan has a download quota, so poll it less often than the local emulator
         self.poll_s = 1.0 if args.cloud else TICK_S
         self.config_poll_s = 10.0 if args.cloud else TICK_S
@@ -255,6 +262,11 @@ class House:
                         s["occ_since"] = now_ms()
                     s["occ"] = new
                     s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
+                hw = room.get("hardware", [])
+                if "C1001 mmWave" in hw:
+                    s["mmwave"] = s.get("occ", 0)               # the radar also sees people sitting still
+                if "PIR" in hw:                                  # PIR only sees movement: it misses still people
+                    s["pir"] = int(bool(s.get("occ")) and random.random() < 0.75)
             devs = room.get("devices") or {}
             if "temp" in sensors:
                 fan_cool = -1.2 if any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs) else 0
@@ -271,11 +283,16 @@ class House:
         for d, st in self.devices.items():
             cfg = self.dev_cfg[d]
             measured = self.caps(d).get("energy", "estimate") != "none"
+            fault = self.faults.get(d)
             if st["v"] and cfg.get("watts") and measured:
                 factor = (st.get("level", 70) / 100) if self.caps(d).get("level") else 1
                 st["watts"] = round(cfg["watts"] * factor * random.uniform(0.97, 1.03), 2)
+                if fault == "high":
+                    st["watts"] = round(st["watts"] * 2.1, 2)        # e.g. motor blocked
+                elif fault == "dead":
+                    st["watts"] = 0.02                                # e.g. burnt bulb
             else:
-                st["watts"] = 0
+                st["watts"] = 1.1 if fault == "standby" and measured else 0
             total += st["watts"]
             if cfg.get("watts") and measured:
                 self.energy[d] = self.energy.get(d, 0) + st["watts"] * dt / 3600
@@ -303,6 +320,8 @@ class House:
         after_label = self.state_label(device, st)
         if source in ("web", "button"):
             self.override_until[device] = time.time() + self.th["override_pause_min"] * 60 / self.speedup
+            if self.ai:
+                self.ai_safe(self.ai.on_manual, device)
         if title is None:
             what = ("speed changed" if self.icon(device) == "fan" else "level changed") if level_only else \
                    "mode changed" if mode_only else "turned on" if v else "turned off"
@@ -347,6 +366,7 @@ class House:
                             why="Tapped in the app", short="Owner · web app", tags=["manual"])
             if scene and scene != self.scene:
                 self.scene = scene
+                self.away = scene == "away"
             node = self.node_of(device)
             fail = None
             if not (self.writable(device) or self.is_lock(device)) or not self.ctrl(device).get("app", False):
@@ -398,6 +418,10 @@ class House:
                         by_label=by_labels[method], change="Locked → Unlocked → Locked (5 s)",
                         latency_ms=latency or random.randint(150, 700), tags=["door"] + (["manual"] if method == "web" else []))
         self.door["last_open"] = {"at": now_ms(), "method": method, **({"who": who} if who else {})}
+        if method in ("fingerprint", "keypad", "web"):
+            self.door_entry_at = time.time()
+            if self.ai and self.ai.recorder:
+                self.ai_safe(self.ai.recorder.event, "door/entry")
         self.lock_at = time.time() + 5
 
     def fingerprints(self):
@@ -504,7 +528,9 @@ class House:
                 rule = dict(source="rule", src_label="Rule", group="rule", by_label="Automation", tags=["rule"])
                 if r.get("off_when_empty") and st["v"] and not self.user_paused(dev) \
                         and empty_for > empty_min * 60 / self.speedup:
-                    saved = round(cfg.get("watts", 0) * empty_min / 60 * 2, 1)
+                    saved = round(float(st.get("watts") or cfg.get("watts", 0)), 2)   # estimate over the next hour
+                    if self.ai:
+                        self.ai_safe(self.ai.ledger.record_saved, "rule", saved)
                     self.set_device(dev, 0, short=f"Empty for {empty_min} min · saved {saved} Wh",
                                     why=f'Rule "Turn off after empty for {empty_min} min"', saved_wh=saved, **rule)
                     self.w.push_alert("good", f"Waste stopped: {self.label(dev).lower()} off",
@@ -564,64 +590,77 @@ class House:
                                  short=f"Off for more than {limit} min", why="It should always be running",
                                  tags=["system", "alert"])
 
-    # ------------------------------------------------ AI (same decision rules as ai/smart_home_ai.py)
-    def run_ai(self):
-        """Every device with control.ai = true takes part. Fans/ACs react to temperature, lights to darkness,
-        anything else to presence. Monitor-only devices in the same room count as presence hints (TV on)."""
-        decisions = []
-        act, suggest = self.th["ai_act_at"], self.th["ai_suggest_at"]
-        open_sugg = {s.get("device") for s in self.w.get_suggestions().values() if not s.get("response")}
-        for dev, cfg in self.dev_cfg.items():
-            if not self.writable(dev) or not self.ctrl(dev).get("ai"):
+    # ------------------------------------------------ AI (the real model from ai/)
+    def house_snapshot(self):
+        return {"rooms": self.rooms, "devices": self.devices, "paused": self.ai_pause,
+                "door_entry_at": self.door_entry_at, "away": self.away}
+
+    def start_ai(self, ai_parts, cloud=False):
+        """Create the AI runtime, bootstrap history if the hub is new, train if needed."""
+        AIRuntime, FirebaseSink, ai_store = ai_parts
+        name = "sim_cloud" if cloud else "sim"
+        con = ai_store.connect(ROOT / "ai" / "data" / f"{name}.db")
+        sink = FirebaseSink(self.w, room_of=lambda d: self.dev_room.get(d),
+                            room_name=lambda r: self.config["rooms"].get(r, {}).get("name", r))
+        self.ai = AIRuntime(self.config, con, sink, model_dir=ROOT / "ai" / "models" / name,
+                            speed=self.speedup, record=True)
+        self.clean_suggestions(keep_open=False)        # open ones from an earlier run can't be tracked
+        t0 = time.time()
+        self.ai_safe(self.ai.bootstrap_if_needed)
+        self.next_train = time.time() + 86400 / self.speedup
+        if self.ai:
+            print(f"AI ready in {time.time() - t0:.0f} s · models in ai/models/{name} · "
+                  f"{self.ai.report.get('data_source', '?')} data")
+
+    def ai_safe(self, fn, *a, **kw):
+        """The AI is an extra layer: an error in it is printed, never allowed to stop the house.
+        After 5 errors in a row it is switched off for this run."""
+        if not self.ai:
+            return None
+        try:
+            out = fn(*a, **kw)
+            self.ai_errors = 0
+            return out
+        except Exception as e:  # noqa: BLE001
+            self.ai_errors = getattr(self, "ai_errors", 0) + 1
+            print(f"! AI error ({type(e).__name__}: {e})" + ("" if self.ai_errors < 5 else " — AI switched off"))
+            if self.ai_errors >= 5:
+                self.ai = None
+            return None
+
+    def clean_suggestions(self, keep_open=True):
+        """Remove answered suggestions older than a day (and, at start, open ones nobody tracks any more)."""
+        day_ago = now_ms() - 86400 * 1000
+        for sid, s in (self.w.get_suggestions() or {}).items():
+            if not isinstance(s, dict):
                 continue
-            rid = self.dev_room[dev]
-            room = self.rooms[rid]
-            temp = room.get("temp", 26)
-            icon = self.icon(dev)
-            thermal, lighting = icon in ("fan", "ac") or self.drules(dev).get("follow_temp"), icon == "light"
-            hint = any(self.devices[o]["v"] for o in self.dev_cfg
-                       if self.dev_room[o] == rid and not self.writable(o) and not self.is_lock(o))
-            p = 0.15 + 0.5 * room.get("occ", 0) + (0.25 if thermal and temp > 27.5 else 0) \
-                + (0.2 if lighting and room.get("lux", 999) < 200 else 0) + (0.1 if hint else 0)
-            p = round(min(0.97, max(0.03, p + random.gauss(0, 0.08))), 2)
-            pct = round(p * 100)
-            when = datetime.now() + timedelta(minutes=random.choice([15, 30, 45, 60]))
-            d = {"device": dev, "p_on": p, "predicted_for": when.isoformat(timespec="minutes"),
-                 "time": hhmm(when), "action": "none"}
-            st = self.devices[dev]
-            label = self.label(dev)
-            rname = self.room_name(rid).lower()
-            if self.paused(dev):
-                d["action"] = "paused_by_override"
-            elif st["v"] and p >= act:
-                d.update(action="keep_on", title=f"{label} stays on",
-                         why=(f"After sunset you usually stay in the {rname} until 22:30." if lighting else
-                              f"The room is {temp}°C and you are usually here now." if thermal else
-                              f"You usually keep it on at this time."))
-            elif not st["v"] and p >= act:
-                d.update(action="schedule_on", execute_at=when.isoformat(timespec="minutes"),
-                         title=f"{label} turns on",
-                         why=(f"Pre-cooling: the {rname} is {temp}°C and you usually move there by "
-                              f"{hhmm(when + timedelta(minutes=15))}." if thermal else
-                              f"It gets dark around then and you are usually in the {rname}." if lighting else
-                              f"You usually turn it on around {hhmm(when)}."))
-                if self.node_of(dev) not in self.offline and random.random() < 0.5:
-                    self.set_device(dev, 1, self.mid_level(dev), source="ai",
-                                    src_label=f"AI · {pct}%", group="ai", by_label="AI (Gradient Boosting)",
-                                    short="Pre-cooling before you got here" if thermal else
-                                    "Getting dark" if lighting else "Your usual time",
-                                    why=f"{d['why']} · {pct}% sure", confidence=p, tags=["ai"])
-            elif not st["v"] and p >= suggest and dev not in open_sugg:
-                d["action"] = "suggest_on"
-                self.w.push_suggestion(dev, "on", p, f"Turn on the {label.lower()}?",
-                                       "You usually use it around this time")
-            elif st["v"] and p <= 1 - act and dev not in open_sugg:
-                d["action"] = "suggest_off"
-                self.w.push_suggestion(dev, "off", 1 - p, f"Turn off the {label.lower()}?",
-                                       "The room is cooling down and it is usually off by now" if thermal
-                                       else f"Nobody has been in the {rname} for a while")
-            decisions.append(d)
-        self.w.write_ai_schedule(decisions)
+            if (s.get("handled") and s.get("at", 0) < day_ago) or (not keep_open and not s.get("response")):
+                self.w.delete_suggestion(sid)
+
+    def run_ai(self):
+        if not self.ai:
+            return
+        if time.time() >= self.next_train:            # nightly retraining (every 2.4 h with --fast)
+            self.next_train = time.time() + 86400 / self.speedup
+            self.ai_safe(self.ai.retrain, quiet=True)
+            self.clean_suggestions()
+        self.ai_safe(self.ai.plan, self.house_snapshot())
+
+    def ai_tick(self, dt):
+        if not self.ai:
+            return
+        for a in self.ai_safe(self.ai.tick, self.house_snapshot(), dt=dt) or []:
+            dev = a["device"]
+            if dev not in self.dev_cfg or self.node_of(dev) in self.offline:
+                continue
+            self.set_device(dev, a["v"], a.get("level") if a["v"] else None, source="ai", src_label=a["src_label"],
+                            group="ai", by_label="AI (Gradient Boosting)", why=a["why"], short=a.get("short"),
+                            confidence=a.get("confidence"), title=a.get("title"), saved_wh=a.get("saved_wh"),
+                            tags=["ai"])
+            if a.get("saved_wh"):
+                rname = self.room_name(self.dev_room[dev])
+                self.w.push_alert("good", f"Waste stopped: {self.label(dev).lower()} off",
+                                  f"{rname} · empty room · saves ~{a['saved_wh']} Wh", "energy")
 
     def handle_suggestion_answers(self):
         for sid, s in self.w.get_suggestions().items():
@@ -629,10 +668,12 @@ class House:
                 continue
             pct = round(s.get("confidence", 0) * 100)
             accepted = s["response"] == "accept"
+            if self.ai:
+                self.ai_safe(self.ai.on_answer, sid, s, accepted)
             if not accepted:
                 self.w.log_event("ai", "ai", f"Suggestion dismissed: {s.get('title', '').rstrip('?')}", "web",
                                  f"AI · {pct}%", device=s.get("device"), node="hub", by_label="Owner (web app)",
-                                 short="The AI will learn from this", why=f"{s.get('why')} · {pct}% sure",
+                                 short="The AI will learn from this (asks less at this time)", why=f"{s.get('why')}",
                                  change="No change", tags=["ai", "manual"])
             self.w.mark_suggestion(sid, {"handled": True,
                                          "done_text": ("Done." if accepted else "Okay. Your home will learn from this.")})
@@ -650,6 +691,8 @@ class House:
                                  short=f"{a}{unit} → {b}{unit}", change=f"{a}{unit} → {b}{unit}", tags=["manual", "system"])
         old_devs = {d for r in old["rooms"].values() for d in (r.get("devices") or {})}
         self.load_config(cfg)
+        if self.ai:
+            self.ai_safe(self.ai.reload, cfg)
         for dev in set(self.dev_cfg) - old_devs:
             c, node = self.dev_cfg[dev], self.node_of(dev)
             ok = node not in self.offline
@@ -742,7 +785,12 @@ class House:
                     self.update_sensors()
                     self.simulate_monitored()
                     self.apply_rules()
-                    self.write_state(self.update_power(dt if dt < 60 else 0))
+                    power = self.update_power(dt if dt < 60 else 0)
+                    if self.ai and self.ai.suggestions:   # read answers first, so "Yes" is never seen as expired
+                        self.handle_suggestion_answers()
+                    self.ai_tick(t - self.last.get("ai_tick", t))
+                    self.last["ai_tick"] = t
+                    self.write_state(power)
                 else:
                     self.update_power(dt if dt < 60 else 0)
                 if t - self.last["sugg"] >= 2:
@@ -781,6 +829,9 @@ def main():
                     help="write to the REAL Firebase project using this service-account key (instead of the emulator)")
     ap.add_argument("--owner-uid", metavar="UID",
                     help="with --cloud: the UID of the owner account you created in Firebase Authentication")
+    ap.add_argument("--fault", action="append", metavar="DEVICE[:KIND]",
+                    help="simulate an energy fault: high (2x power, default), dead (no power), standby (power while off)")
+    ap.add_argument("--no-ai", action="store_true", help="run without the AI")
     args = ap.parse_args()
 
     if args.cloud:
@@ -811,9 +862,17 @@ def main():
         if uid:
             print(f"owner login: {OWNER_EMAIL} / {OWNER_PASSWORD}")
     backfill_energy(w, config)
-    write_ai_insights(w, config)
     house = House(w, config, args)
     house.update_sensors()
+    ai_parts = load_ai(args)
+    if ai_parts:
+        try:
+            house.start_ai(ai_parts, cloud=bool(args.cloud))
+        except Exception as e:  # noqa: BLE001 — the house runs without the AI
+            print(f"! AI could not start ({type(e).__name__}: {e}) — running without it")
+            house.ai = None
+    if not house.ai:
+        w.write_ai_insights({"status": "off"})
     house.run_ai()
     try:
         house.run()

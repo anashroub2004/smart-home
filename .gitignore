@@ -21,6 +21,7 @@ venv/
 *.db
 *.db-journal
 ai/models/
+ai/data/
 emulator-data/
 
 # Firebase

@@ -90,17 +90,31 @@ class Writer:
     def write_ai_insights(self, insights):
         self.db.put("ai_insights", insights)
 
-    def push_suggestion(self, device, action, confidence, title, why):
-        return self.db.post("suggestions", {
-            "device": device, "action": action, "confidence": round(confidence, 2),
-            "title": title, "why": why, "at": now_ms(),
-        })
+    def patch_ai_insights(self, partial):
+        self.db.patch("ai_insights", partial)
+
+    def push_suggestion(self, device, action, confidence, title, why, expires_at=None):
+        data = {"device": device, "action": action, "confidence": round(confidence, 2),
+                "title": title, "why": why, "at": now_ms()}
+        if expires_at:
+            data["expires_at"] = int(expires_at)
+        res = self.db.post("suggestions", data)
+        return res.get("name") if isinstance(res, dict) else res
 
     def get_suggestions(self):
         return self.db.get("suggestions") or {}
 
     def mark_suggestion(self, sid, data):
         self.db.patch(f"suggestions/{sid}", data)
+
+    def delete_suggestion(self, sid):
+        """Expired suggestions are removed (the web stops showing them); /events keeps the record."""
+        self.db.delete(f"suggestions/{sid}")
+
+    def write_energy_waste(self, day, per_device):
+        """/energy_waste/{day}/{device}/{cause} = Wh  (cause: forgotten | rule_delay | ai | standby)"""
+        if per_device:
+            self.db.patch(f"energy_waste/{day}", per_device)
 
     # ------------------------------------------------------------ security
     def log_access(self, method, ok, who=None):

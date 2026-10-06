@@ -8,6 +8,7 @@
     "nodes":        { ".read": "auth != null", ".write": false },
     "summaries":    { ".read": "auth != null", ".write": false },
     "energy_daily": { ".read": "auth != null", ".write": false },
+    "energy_waste": { ".read": "auth != null", ".write": false },
     "ai_schedule":  { ".read": "auth != null", ".write": false },
     "ai_insights":  { ".read": "auth != null", ".write": false },
     "prefs":        { ".read": "auth != null", ".write": "auth != null" },
