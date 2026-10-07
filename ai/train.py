@@ -22,7 +22,7 @@ import sklearn
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import brier_score_loss, f1_score, precision_score, recall_score
 
-from . import anomaly, drift, explain, presence
+from . import anomaly, drift, explain, habits, presence
 from . import settings as S
 from . import store
 from .features import CORE, build_features, load_slots, local_now, usable
@@ -156,6 +156,9 @@ def train_all(config, con, model_dir=None, now_ts=None, labels=None, quiet=False
                       f"exact={metrics['exact']}  ±15min={metrics['within_15']}  brier={metrics['brier']}")
             else:
                 print(f"{dev:16s} learning: {metrics['days']}/{S.MIN_DAYS} days of data")
+    # learned habits (questions about NOW: light on when you walk in? light off while you rest?)
+    use = slots[usable(slots) & (slots.index >= local_now(since))]
+    habits.save(model_dir / "habits.json", habits.learn(use, specs, now))
     # presence
     doors = door_slots(con, since)
     pm, pmeta = presence.train(slots, doors)

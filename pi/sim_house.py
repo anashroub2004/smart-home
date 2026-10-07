@@ -59,6 +59,8 @@ AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
 TICK_S = 0.25
 DARK_PATIENCE_S = 180            # the person switches the light on himself after 3 min in the dark
+BED_FORGET = 0.3                 # some nights he falls asleep with the light on
+PIR_RATE = 12.0                  # PIR movements per minute = 12 x (1 - still)^2
 BASE_W = 6.8            # Raspberry Pi + 3 ESP32 nodes + sensors
 
 
@@ -157,6 +159,13 @@ class House:
         self.empty_since = {}            # room -> ts
         self.dark_since = {}             # room -> ts the person has been sitting in the dark
         self.manual_at = {}              # device -> ts of the last app / wall-button control
+        self.bed_since, self.bed_forgets = None, {}
+        self.sensor_t = None
+        self.kpi = {}                    # day -> counts (learning curve: manual fixes, questions, automatic actions)
+        self.kpi_ai0 = None              # AI stats at the start of the day
+        self.sim_answers = bool(getattr(args, "twin_only", False) or getattr(args, "auto_answer", False))
+        self.answer_at = {}              # suggestion id -> virtual ts the simulated person answers
+        self.sync_retrain = False        # headless runs (learning curve) retrain in place
         self.energy_day = day_key()
         self.energy = dict(w.get_energy_day(self.energy_day))
         self.failed_door = 0
@@ -296,6 +305,9 @@ class House:
     # ------------------------------------------------ sensors
     def update_sensors(self):
         now = vnow()
+        t = CLOCK.now()
+        sens_dt = min(60.0, max(1.0, t - (self.sensor_t or t - 5)))   # seconds since the last reading
+        self.sensor_t = t
         h = now.hour + now.minute / 60
         outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi) + self.temp_delta
         daylight = max(0.0, math.sin((h - 6) / 13 * math.pi)) if 6 <= h <= 19 else 0
@@ -319,7 +331,9 @@ class House:
                 if "C1001 mmWave" in hw:
                     s["mmwave"] = new                            # the radar also sees people sitting still
                 if "PIR" in hw:                                  # PIR only sees movement: it misses still people
-                    s["pir"] = int(bool(new) and random.random() > self.person.still)
+                    # movements per minute: walking ~10/min, TV ~2/min, reading ~0.5/min, asleep ~0.1/min
+                    rate = PIR_RATE * (1 - self.person.still) ** 2
+                    s["pir"] = int(bool(new) and random.random() < 1 - math.exp(-rate * sens_dt / 60))
             devs = room.get("devices") or {}
             if "temp" in sensors:
                 fan_cool = -1.2 if any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs) else 0
@@ -379,7 +393,8 @@ class House:
             self.manual_at[device] = CLOCK.now()
             self.override_until[device] = CLOCK.now() + self.th["override_pause_min"] * 60 / self.speedup
             if self.ai:
-                self.ai_safe(self.ai.on_manual, device)
+                self.ai_safe(self.ai.on_manual, device, v=int(v))
+            self.kpi_add("manual")
         if title is None:
             what = ("speed changed" if self.icon(device) == "fan" else "level changed") if level_only else \
                    "mode changed" if mode_only else "turned on" if v else "turned off"
@@ -590,7 +605,9 @@ class House:
                 elif self.paused(dev) or not s.get("occ"):
                     continue
                 elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"] \
-                        and (s.get("entry_pending") or t - s.get("occ_since", 0) / 1000 < 90):
+                        and (s.get("entry_pending") or t - s.get("occ_since", 0) / 1000 < 90) \
+                        and not (self.ai and self.ai_safe(self.ai.handles_entry, dev)):
+                    # fallback only: when the AI is ready for this light it decides from your habits
                     # only when someone has just come in: a person sleeping or who switched it off stays in the dark
                     self.set_device(dev, 1, self.mid_level(dev), short=f"Light below {th['light_on_lux']} lx",
                                     why=f'Rule "On below {th["light_on_lux"]} lx" · light {s.get("lux")} lx · someone in the room', **rule)
@@ -649,10 +666,10 @@ class House:
         return {"rooms": self.rooms, "devices": self.devices, "paused": self.ai_pause,
                 "door_entry_at": self.door_entry_at, "away": self.away}
 
-    def start_ai(self, ai_parts, cloud=False):
+    def start_ai(self, ai_parts, cloud=False, name=None):
         """Create the AI runtime, bootstrap history if the hub is new, train if needed."""
         AIRuntime, FirebaseSink, ai_store = ai_parts
-        name = "sim_cloud" if cloud else ("twin" if self.args.twin_only else "sim")
+        name = name or ("sim_cloud" if cloud else ("twin" if self.args.twin_only else "sim"))
         con = ai_store.connect(ROOT / "ai" / "data" / f"{name}.db")
         last = con.execute("SELECT MAX(ts) FROM readings").fetchone()[0]
         if last and last > CLOCK.now():
@@ -712,8 +729,8 @@ class House:
             self.next_train = self.next_3am()
             self.resume_after_train = not CLOCK.paused
             CLOCK.pause()                             # the virtual day waits for the new models
-            if self.ai_safe(self.ai.start_retrain):   # in the background: the house and the twin page stay live
-                return
+            if not self.sync_retrain and self.ai_safe(self.ai.start_retrain):
+                return                                # in the background: the house and the twin page stay live
             self.ai_safe(self.ai.retrain, quiet=True)  # in-memory DB: no second connection possible
             self.after_retrain()
             return
@@ -808,12 +825,11 @@ class House:
         """Move the person along today's routine; doors, light switches and the TV follow what he does."""
         moved = self.person.step(CLOCK.now())
         self.dark_habit()
+        self.bed_habit()
         if not moved:
             return
         old, new = moved
         self.changes.append((CLOCK.now(), "room", "person", new))
-        if self.person.activity == "Sleeping" and new and new != OUT:
-            self.leave_room_habits(new, always=True, lights_only=True)   # lights off before sleeping
         if old and old != OUT and self.person.habits:
             self.leave_room_habits(old)
         if new == OUT and old is not None:                     # leaving: exit button, camera sees him
@@ -847,6 +863,114 @@ class House:
                                 why="Switched off before sleeping" if always else "Switched off when leaving the room",
                                 tags=["manual"])
 
+    def bed_habit(self):
+        """Lying down to sleep with the light on: most nights he switches it off himself after a minute or two,
+        some nights he falls asleep with it on (decided once per night) — the case the AI must learn to handle."""
+        p = self.person
+        if p.activity != "Sleeping" or p.manual or not p.habits:
+            self.bed_since = None
+            return
+        now = CLOCK.now()
+        night = vnow().date() if vnow().hour >= 12 else (vnow() - timedelta(days=1)).date()
+        lights = [d for d in (self.config["rooms"].get(p.room, {}).get("devices") or {})
+                  if self.icon(d) == "light" and self.devices[d]["v"] and self.writable(d) and self.ctrl(d).get("button")]
+        if not lights:
+            self.bed_since = None
+            return
+        self.bed_since = self.bed_since or now
+        if self.bed_forgets.get(night) is None:
+            self.bed_forgets = {night: random.random() < BED_FORGET}
+        if not self.bed_forgets[night] and now - self.bed_since >= 90 / self.speedup:
+            for d in lights:
+                self.set_device(d, 0, source="button", src_label="Button", group="manual",
+                                by_label="Someone at home (button)", short=f"Wall button in the {self.room_name(p.room).lower()}",
+                                why="Switched off after lying down to sleep", tags=["manual"])
+                self.kpi_add("manual_fix")
+            self.bed_since = None
+
+    # ------------------------------------------------ learning curve (per day) + simulated answers
+    KPI_AI = ("suggested", "accepted", "dismissed", "expired", "ai_on", "ai_entry_on", "ai_entry_skip", "smart_off",
+              "ai_auto_off", "ai_trusted", "ai_undone", "trust_up", "trust_down")
+
+    def kpi_day(self):
+        day = vnow().strftime("%Y-%m-%d")
+        if day not in self.kpi:
+            stats = dict((self.ai.state.get("stats") or {}) if self.ai else {})
+            self.kpi[day] = {"manual": 0, "manual_fix": 0, "asleep_light_min": 0.0, "ai0": stats}
+            for old in sorted(self.kpi)[:-60]:
+                self.kpi.pop(old)
+        return self.kpi[day]
+
+    def kpi_add(self, key, n=1):
+        k = self.kpi_day()
+        k[key] = k.get(key, 0) + n
+
+    def kpi_tick(self, dt):
+        """Minutes a light burned while the person slept in that room (the 'fell asleep with the light on' cost)."""
+        p = self.person
+        if p.activity == "Sleeping" and p.room in self.config["rooms"]:
+            if any(self.devices[d]["v"] and self.icon(d) == "light" for d in (self.config["rooms"][p.room].get("devices") or {})):
+                self.kpi_add("asleep_light_min", dt / 60)
+
+    def kpi_view(self):
+        """[{day, manual, manual_fix, asleep_light_min, asked, yes, no, ai_auto, ...}] oldest first."""
+        days = sorted(self.kpi)
+        now_stats = dict((self.ai.state.get("stats") or {}) if self.ai else {})
+        out = []
+        for i, d in enumerate(days):
+            k = self.kpi[d]
+            end = self.kpi[days[i + 1]]["ai0"] if i + 1 < len(days) else now_stats
+            delta = {key: round(end.get(key, 0) - k["ai0"].get(key, 0), 2) for key in self.KPI_AI}
+            out.append({"day": d, "manual": k["manual"], "manual_fix": k["manual_fix"],
+                        "asleep_light_min": round(k["asleep_light_min"]), "asked": delta["suggested"],
+                        "yes": delta["accepted"], "no": delta["dismissed"], "unanswered": delta["expired"],
+                        "ai_auto": delta["ai_on"] + delta["ai_entry_on"] + delta["smart_off"] + delta["ai_auto_off"],
+                        "ai_learned": delta["ai_trusted"], "undone": delta["ai_undone"], **delta})
+        return out
+
+    def wants(self, dev, action):
+        """What the simulated person would answer: does he want this device on / off right now?"""
+        p, rid = self.person, self.dev_room.get(dev)
+        here = p.room == rid
+        if action == "off":
+            return not here or p.activity == "Sleeping"
+        if not here or p.activity == "Sleeping":
+            return False
+        s = self.rooms.get(rid) or {}
+        if self.icon(dev) == "light":
+            return s.get("lux", 0) < self.th["light_on_lux"]
+        if self.icon(dev) in ("fan", "ac"):
+            return s.get("temp", 0) > self.th["fan_on_temp"]
+        return True
+
+    def simulated_answers(self):
+        """In the twin (and with --auto-answer) the simulated person answers the AI's questions after 1-4 min,
+        the way he would want it. With the real app (--cloud) you answer yourself."""
+        if not (self.sim_answers and self.ai and self.ai.suggestions) or (self.scenarios and self.scenarios.cur):
+            return                                    # test scenarios control the answers themselves
+        now = CLOCK.now()
+        for sid, info in list(self.ai.suggestions.items()):
+            due = self.answer_at.setdefault(sid, now + random.uniform(60, 240) / self.speedup)
+            if now >= due:
+                self.answer_at.pop(sid, None)
+                self.answer_suggestion(sid, self.wants(info["device"], info["action"]), "the simulated person")
+        for sid in [k for k in self.answer_at if k not in self.ai.suggestions]:
+            self.answer_at.pop(sid)
+
+    def answer_suggestion(self, sid, accept, by):
+        """Answer exactly like the web app does: write the response; on Yes run the command 'via suggestion'."""
+        s = (self.w.get_suggestions() or {}).get(sid)
+        if not isinstance(s, dict) or s.get("response"):
+            return
+        self.w.mark_suggestion(sid, {"response": "accept" if accept else "dismiss", "answered_by": by})
+        dev = s.get("device")
+        if accept and dev in self.dev_cfg:
+            v = 1 if s.get("action") == "on" else 0
+            pct = round((s.get("confidence") or 0) * 100)
+            self.set_device(dev, v, self.mid_level(dev) if v else None, source="ai", src_label=f"AI · {pct}% · approved",
+                            group="ai", by_label=f"AI suggestion, approved by {by}", why="Yes to an AI suggestion",
+                            short="Suggestion approved", confidence=s.get("confidence"), tags=["ai", "manual"])
+
     def dark_habit(self):
         """Like a real person: awake in a dark room with the light off, he presses the wall switch himself
         after a few minutes (only if the rules / AI did not). Not if he switched it off himself in this room."""
@@ -868,6 +992,7 @@ class House:
         since = self.dark_since.setdefault(rid, now)
         if now - since >= DARK_PATIENCE_S / self.speedup:
             self.dark_since.pop(rid, None)
+            self.kpi_add("manual_fix")
             self.set_device(off[0], 1, self.mid_level(off[0]), source="button", src_label="Button", group="manual",
                             by_label="Someone at home (button)",
                             short=f"Wall button in the {self.room_name(rid).lower()}",
@@ -941,6 +1066,9 @@ class House:
             self.scenarios.stop()
         elif a == "wrong_pin":
             self.wrong_attempt("keypad")
+        elif a == "answer":
+            self.answer_suggestion(c["sid"], bool(c.get("yes")), "you (twin page)")
+            self.handle_suggestion_answers()
 
     def twin_state(self):
         now = CLOCK.now()
@@ -976,6 +1104,8 @@ class House:
             "changes": [c for c in self.changes if c[0] >= day0 - 3600],
             "ai": self.ai_safe(self.ai.twin_view, house, now) if self.ai else None,
             "scenarios": self.scenarios.view() if self.scenarios else None,
+            "kpi": self.kpi_view()[-28:],
+            "sim_answers": self.sim_answers,
         }
         body = json.dumps(state, default=str).encode()
         if body != self.twin_json:
@@ -1023,59 +1153,10 @@ class House:
         if self.args.lockout:
             for _ in range(self.th["door_lockout_attempts"]):
                 self.wrong_attempt("keypad")
-        sp = self.speedup
-        last_tick = CLOCK.now()
-        real = {}                                  # real-time throttles: the free Firebase plan has a quota
-        state_real_s = 1.0 if self.args.cloud else 0.5
-        summary_real_s = 5.0 if self.args.cloud else 0.5
+        self.loop_state = dict(last_tick=CLOCK.now(), real={})
         while True:
-            r = time.time()
             try:
-                self.handle_twin_commands()
-                t = CLOCK.now()
-                dt, last_tick = max(0.0, t - last_tick), t
-                if r - real.get("cmd", 0) >= self.poll_s:
-                    real["cmd"] = r
-                    self.handle_commands()
-                if r - real.get("cfg", 0) >= self.config_poll_s:
-                    real["cfg"] = r
-                    cfg = self.w.get_config()
-                    if cfg and json.dumps(cfg, sort_keys=True) != json.dumps(self.config, sort_keys=True):
-                        self.apply_config(cfg)
-                if t - self.last["state"] >= 5 / sp:
-                    self.last["state"] = t
-                    if r - real.get("pause", 0) >= self.poll_s:
-                        real["pause"] = r
-                        self.sync_ai_pause()
-                    self.person_tick()
-                    self.update_sensors()
-                    self.simulate_monitored()
-                    self.apply_rules()
-                    power = self.update_power(dt if dt < 3600 else 0)
-                    if self.ai and self.ai.suggestions:   # read answers first, so "Yes" is never seen as expired
-                        self.handle_suggestion_answers()
-                    if not self.ai_training():
-                        self.ai_tick(t - self.last.get("ai_tick", t))
-                        self.last["ai_tick"] = t
-                    if self.scenarios:
-                        self.scenarios.tick()
-                    if r - real.get("state", 0) >= state_real_s:
-                        real["state"] = r
-                        self.write_state(power)
-                else:
-                    self.update_power(dt if dt < 3600 else 0)
-                if r - real.get("sugg", 0) >= 2:
-                    real["sugg"] = r
-                    self.handle_suggestion_answers()
-                if t - self.last["summary"] >= 60 / sp and r - real.get("summary", 0) >= summary_real_s:
-                    self.last["summary"] = t
-                    real["summary"] = r
-                    self.write_summary()
-                self.check_retrain()
-                if t - self.last["ai"] >= 900 / sp:
-                    self.last["ai"] = t
-                    self.run_ai()
-                self.twin_state()
+                self.step()
             except (RuntimeError, OSError) as e:
                 hint = "check your internet / key" if self.args.cloud else "are the emulators running? `firebase emulators:start`"
                 print(f"! {e}  ({hint})")
@@ -1083,6 +1164,65 @@ class House:
             self.wake.wait(TICK_S)                    # a twin command wakes the loop at once
             self.wake.clear()
 
+    def step(self, headless=False):
+        """One pass of the main loop. headless=True (learning-curve runs): no Firebase / twin page work,
+        the caller moves the virtual clock forward between steps."""
+        sp = self.speedup
+        ls = self.loop_state
+        real = ls["real"]
+        r = time.time()
+        state_real_s = 1.0 if self.args.cloud else 0.5
+        summary_real_s = 5.0 if self.args.cloud else 0.5
+        if not headless:
+            self.handle_twin_commands()
+        t = CLOCK.now()
+        dt, ls["last_tick"] = max(0.0, t - ls["last_tick"]), t
+        if not headless and r - real.get("cmd", 0) >= self.poll_s:
+            real["cmd"] = r
+            self.handle_commands()
+        if not headless and r - real.get("cfg", 0) >= self.config_poll_s:
+            real["cfg"] = r
+            cfg = self.w.get_config()
+            if cfg and json.dumps(cfg, sort_keys=True) != json.dumps(self.config, sort_keys=True):
+                self.apply_config(cfg)
+        if t - self.last["state"] >= 5 / sp:
+            state_dt = t - self.last["state"] if self.last["state"] else 0
+            self.last["state"] = t
+            if not headless and r - real.get("pause", 0) >= self.poll_s:
+                real["pause"] = r
+                self.sync_ai_pause()
+            self.person_tick()
+            self.update_sensors()
+            self.simulate_monitored()
+            self.apply_rules()
+            power = self.update_power(dt if dt < 3600 else 0)
+            self.kpi_tick(state_dt if state_dt < 3600 else 0)
+            self.simulated_answers()
+            if self.ai and self.ai.suggestions:   # read answers first, so "Yes" is never seen as expired
+                self.handle_suggestion_answers()
+            if not self.ai_training():
+                self.ai_tick(t - self.last.get("ai_tick", t))
+                self.last["ai_tick"] = t
+            if self.scenarios:
+                self.scenarios.tick()
+            if not headless and r - real.get("state", 0) >= state_real_s:
+                real["state"] = r
+                self.write_state(power)
+        else:
+            self.update_power(dt if dt < 3600 else 0)
+        if not headless and r - real.get("sugg", 0) >= 2:
+            real["sugg"] = r
+            self.handle_suggestion_answers()
+        if not headless and t - self.last["summary"] >= 60 / sp and r - real.get("summary", 0) >= summary_real_s:
+            self.last["summary"] = t
+            real["summary"] = r
+            self.write_summary()
+        self.check_retrain()
+        if t - self.last["ai"] >= 900 / sp:
+            self.last["ai"] = t
+            self.run_ai()
+        if not headless:
+            self.twin_state()
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1104,6 +1244,8 @@ def main():
                     help="digital twin without Firebase (in memory): any speed, scenarios, no quota")
     ap.add_argument("--twin-port", type=int, default=8765, help="port of the digital twin page (default 8765)")
     ap.add_argument("--no-twin", action="store_true", help="don't start the digital twin page")
+    ap.add_argument("--auto-answer", action="store_true",
+                    help="the simulated person answers the AI's questions (default in --twin-only; with --cloud you answer in the app)")
     args = ap.parse_args()
     if args.speed:
         CLOCK.set_speed(args.speed)

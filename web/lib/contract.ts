@@ -286,7 +286,19 @@ export interface AiInsights {
   energy?: { wasted_wh: number; saved_by_ai_wh: number; saved_by_rules_wh: number; wasted_by_ai_wh: number; ai_net_wh: number };
   anomalies?: EnergyAnomaly[];
   wear?: Record<string, number>; // device -> rise of its usual power over 4 weeks (0.3 = +30%)
-  stats?: Record<string, number>; // ai_on, ai_hit, ai_miss, smart_off, suggested, accepted, dismissed, expired, skipped
+  stats?: Record<string, number>; // ai_on, ai_hit, ai_miss, smart_off, suggested, accepted, dismissed, expired, skipped,
+  // ai_entry_on, ai_entry_skip, ai_auto_off, ai_trusted, ai_undone
+  trust?: AiTrust[]; // trust ladder (2026-10-09): what the AI learned to do without asking
+}
+
+export interface AiTrust {
+  device: string;
+  label: string;
+  kind: "off_still" | "suggest_on";
+  level: 0 | 1 | 2; // 0 asks first · 1 does it and tells you · 2 does it by itself
+  text: string;
+  yes: number; // "yes" answers in a row (level 0 -> 1 after 3)
+  ok: number; // automatic actions nobody undid (level 1 -> 2 after 5)
 }
 
 export interface Suggestion {

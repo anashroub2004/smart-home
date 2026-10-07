@@ -30,7 +30,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from . import anomaly, energy, explain, gate, policy, presence, store, train
+from . import anomaly, energy, explain, gate, habits, policy, presence, store, train, trust
 from . import settings as S
 from .features import CORE, build_features, load_slots, local_now
 from .spec import ai_devices, device_label, energy_devices, room_presence_keys, visible_rooms
@@ -63,6 +63,11 @@ class AIRuntime:
         self.suggestions = {}     # suggestion id -> info (open suggestions created by us)
         self.snooze = {}          # device -> no new suggestion before this ts
         self.vacant_since = {}    # room -> ts
+        self.occ_since = {}       # room -> ts someone came in (any presence sensor)
+        self.entry_done = {}      # device -> occ_since of the entry already decided (one decision per entry)
+        self.quiet_since = {}     # room -> ts the PIR went quiet while the radar still sees someone
+        self.auto = {}            # device -> {at, v, kind} automatic action that you may still undo
+        self.closed = {}          # suggestion id -> info of a closed suggestion (an answer can arrive late)
         self.house_rooms = {}     # latest room readings (for borrowed temperature / light)
         self.last_decisions = []  # the latest plan (shown by the digital twin)
         self.ledger = energy.WasteLedger()
@@ -82,6 +87,7 @@ class AIRuntime:
         self.energy_devs = energy_devices(config)
         self.room_keys = {rid: room_presence_keys(rid, room) for rid, room in config["rooms"].items()}
         self.bundles = {d: self.safe_load(d) for d in self.specs}
+        self.habits = habits.load(self.model_dir / "habits.json")
         self.report = train.load_json(self.model_dir / "report.json", {})
         old = getattr(self, "detector", None)
         self.detector = anomaly.Detector(train.load_json(self.model_dir / "baselines.json", {}))
@@ -109,6 +115,23 @@ class AIRuntime:
 
     def minutes(self, m):
         return m * 60 / self.speed
+
+    def habit_use(self, dev, now):
+        """How likely you use this device now or in the next 30 min (learned habit table), or None."""
+        a = habits.use_now(self.habits, dev, now)
+        b = habits.use_now(self.habits, dev, now, S.HABIT_AHEAD_MIN)
+        return None if a is None or b is None else max(a, b)
+
+    def handles_entry(self, dev):
+        """True when the AI decides about this light when you walk in (the 'dark room' rule is then only the
+        fallback): the AI is ready for it, has learned your habits for it, and you did not just control it."""
+        spec = self.specs.get(dev)
+        if spec is None or spec.kind != "light" or not self.bundles.get(dev) or not spec.occ:
+            return False
+        now = self.clock()
+        if now - self.override_at.get(dev, -1e18) < self.override_pause_s():
+            return False
+        return self.habit_use(dev, now) is not None
 
     def env(self, spec, rooms):
         """temperature / light for a device, borrowed from another room when its own room has no sensor."""
@@ -164,7 +187,8 @@ class AIRuntime:
         devices_changed = set(self.report.get("devices", {})) != set(self.specs)
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")
                       in ("ready", "relearning") for d in self.specs)
-        if not self.report or devices_changed or missing or now - trained > 86400:
+        no_habits = not (self.model_dir / "habits.json").exists()      # models from before the habit tables
+        if not self.report or devices_changed or missing or no_habits or now - trained > 86400:
             self.retrain(now, quiet=quiet)
         else:
             self.publish_insights(now)
@@ -237,7 +261,8 @@ class AIRuntime:
         doc = {"status": r.get("status", "learning"), "model": "Gradient Boosting",
                "data_source": r.get("data_source", "real"), "learned": r.get("learned", []),
                "devices": {}, "presence": r.get("presence", {}), "wear": r.get("wear", {}),
-               "anomalies": self.anomalies[-10:], "energy": self.ledger.totals(), "stats": self.state.get("stats", {})}
+               "anomalies": self.anomalies[-10:], "energy": self.ledger.totals(), "stats": self.state.get("stats", {}),
+               "trust": trust.summary(self.state, self.labels)}
         if r.get("summary"):
             s = r["summary"]
             doc["metrics"] = {"within_15": s["within_15"], "exact": s["exact"], "f1": s["f1"],
@@ -299,6 +324,10 @@ class AIRuntime:
         th = self.thresholds(spec, hour, drift=drift)
         paused = self.paused(dev, house, now)
         action = policy.decide(p, st_now, th, armed=self.armed.get(dev, False), paused=paused)
+        # trust ladder: you said yes to this question often enough -> the AI does it (if the sensors agree)
+        learned = action == "suggest_on" and trust.level(self.state, dev, "suggest_on") >= S.TRUST_NOTIFY
+        if learned:
+            action = "schedule_on"
         contrib = explain.local_contributions(bundle["model"], x, bundle.get("typical", {}))
         why = explain.why_text(spec, x, contrib, p, action, self.labels)
         d = dict(base, action=action, p_on=round(p, 2), status="relearning" if drift else "ready",
@@ -326,9 +355,12 @@ class AIRuntime:
                     d["why"] = f"Pre-{'heating' if spec.heating else 'cooling'} · " + why[:1].lower() + why[1:]
             if old:
                 start, deadline = min(start, old["start"]), max(deadline, old["deadline"])
+            if learned:                    # it would have asked now: do it now, if the sensors agree
+                start, target, deadline = now, now, now + self.minutes(S.SUGGESTION_TTL_MIN)
+                d.update(title=f"{label} on (you usually say yes)", time=hhmm(now))
             d["predicted_for"] = iso(target)
             self.pending[dev] = dict(start=start, target=target, deadline=deadline, p=p, why=d["why"], level=level,
-                                     title=d["title"])
+                                     title=d["title"], kind="suggest_on" if learned else None)
         elif action == "keep_on":
             d.update(title=f"{label} stays on")
         elif action in ("suggest_on", "suggest_off"):
@@ -359,18 +391,51 @@ class AIRuntime:
             ok, _ = gate.check_on(spec, room, home, self.th.get("light_on_lux", 150), temp, lux)
             if not ok:                      # never suggest something the sensors already contradict
                 return
-        elif spec.kind == "light" and gate.room_occupied(room):
-            return                          # don't suggest switching the light off on someone sitting there
-        label = self.labels.get(dev, dev).lower()
+        else:
+            return                          # no "turn off?" questions: someone in the room -> never on someone
+                                            # sitting there (the trust ladder handles "you are resting");
+                                            # empty room -> the smart off does it a few minutes later anyway
         on = action == "suggest_on"
-        conf = p if on else 1 - p
+        self.ask(dev, spec, "on" if on else "off", "suggest_on" if on else None, p if on else 1 - p, why, room, now)
+
+    def ask(self, dev, spec, action, kind, conf, why, room, now, title=None):
+        """Push a question to the app. kind = the trust-ladder decision the answer counts for (or None)."""
+        if any(s["device"] == dev for s in self.suggestions.values()) or now < self.snooze.get(dev, 0):
+            return None
+        label = self.labels.get(dev, dev).lower()
         expires = now + self.minutes(S.SUGGESTION_TTL_MIN)
-        title = f"Turn {'on' if on else 'off'} the {label}?"
-        sid = self.sink.push_suggestion(dev, "on" if on else "off", conf, title, why, int(expires * 1000))
+        title = title or f"Turn {action} the {label}?"
+        sid = self.sink.push_suggestion(dev, action, conf, title, why, int(expires * 1000))
         if sid:
-            self.suggestions[sid] = dict(device=dev, action="on" if on else "off", at=now, expires=expires,
+            self.suggestions[sid] = dict(device=dev, action=action, at=now, expires=expires, kind=kind,
                                          occ=bool(gate.room_occupied(room)), title=title, conf=conf)
             self.stat("suggested")
+        return sid
+
+    def automatic(self, dev, spec, v, kind, now, action):
+        """The AI did something by itself because you trusted it (trust ladder level 1 or 2).
+        Level 1 tells you (switch it back = undo); level 2 only writes it in the history."""
+        self.auto[dev] = dict(at=now, v=int(v), kind=kind)
+        self.stat("ai_trusted")
+        lvl = trust.level(self.state, dev, kind)
+        e = trust.entry(self.state, dev, kind)
+        action["src_label"] = "AI · learned"
+        action["why"] = action.get("why", "") + (f" · learned from your answers (level {lvl})")
+        if lvl == S.TRUST_NOTIFY:
+            label = self.labels.get(dev, dev)
+            self.sink.alert("info", f"{label} turned {'on' if v else 'off'} by the AI",
+                            f"{action.get('short', '')} · switch it back within {S.UNDO_WINDOW_MIN} min if that was wrong "
+                            f"— the AI will ask first again ({e.get('ok', 0)}/{S.TRUST_SILENT_AFTER} before it stops "
+                            f"telling you)", device=dev)
+
+    def trust_changed(self, dev, kind, level, reason):
+        label = self.labels.get(dev, dev)
+        text = trust.LEVEL_NAMES[level]
+        self.stat("trust_up" if level > S.TRUST_ASK else "trust_down")
+        self.sink.log("ai", "ai", f"{label}: the AI now {text}", device=dev, room=getattr(self.specs.get(dev), "room", None),
+                      short=f"{trust.KIND_TEXT.get(kind, kind)} · {reason}",
+                      why=f"Trust ladder for {trust.KIND_TEXT.get(kind, kind)}: {reason}. Level {level} = {text}.",
+                      change=f"Level {level}", src_label="AI · learning", tags=["ai"])
 
     def plan_presence(self, slots, house, now):
         if self.presence_model is None or slots.empty:
@@ -410,6 +475,16 @@ class AIRuntime:
             since = self.vacant_since.get(spec.room) if spec else None
             if since is not None and since >= at:
                 self.override_at.pop(dev)
+        for rid, room in rooms.items():                      # entries + "lying still" (radar yes, PIR quiet)
+            if gate.room_occupied(room):
+                self.occ_since.setdefault(rid, now)
+            else:
+                self.occ_since.pop(rid, None)
+            pir = gate.value(room, "pir")
+            if pir == 0 and gate.value(room, "mmwave"):
+                self.quiet_since.setdefault(rid, now)
+            else:
+                self.quiet_since.pop(rid, None)
 
         # 1. scheduled switch-ons waiting for the sensor gate
         for dev in list(self.pending):
@@ -435,6 +510,8 @@ class AIRuntime:
                 target = max(pend["target"], now)
                 self.guards[dev] = dict(on_at=now, deadline=target + self.minutes(spec.grace_min), p=pend["p"])
                 self.stat("ai_on")
+                if pend.get("kind"):                           # earned by your "yes" answers (trust ladder)
+                    self.automatic(dev, spec, 1, pend["kind"], now, actions[-1])
             elif now > pend["deadline"]:
                 self.pending.pop(dev)
                 self.stat("skipped")
@@ -442,6 +519,46 @@ class AIRuntime:
                               room=spec.room, short=f"Skipped: {reason}",
                               why=f"Predicted ({round(pend['p'] * 100)}%) but the sensors said: {reason}",
                               change="No change", confidence=round(pend["p"], 2), src_label="AI", tags=["ai"])
+
+        # 1b. you walked into a dark room: the AI decides about the light from your learned habit
+        acted_now = {a["device"] for a in actions}
+        for dev, spec in self.specs.items():
+            since = self.occ_since.get(spec.room)
+            if spec.kind != "light" or since is None or self.entry_done.get(dev) == since:
+                continue
+            if now - since > max(self.minutes(S.ENTRY_WINDOW_S / 60), 1):
+                self.entry_done[dev] = since
+                continue
+            st = devices.get(dev) or {}
+            if st.get("v") or dev in acted_now or self.paused(dev, house, now) or not self.handles_entry(dev):
+                self.entry_done[dev] = since
+                continue
+            _, lux = self.env(spec, rooms)
+            if lux is None:
+                continue                                       # wait for a light reading (within the window)
+            self.entry_done[dev] = since
+            if lux >= lux_limit:
+                continue
+            u = self.habit_use(dev, now)
+            pct = round(u * 100)
+            rest = habits.rest_now(self.habits, spec.room, now)
+            need = S.HABIT_ON_AT_REST if rest is not None and rest >= S.REST_AT else S.HABIT_ON_AT
+            if u >= need:
+                actions.append(dict(device=dev, v=1, level=None, confidence=round(u, 2), src_label=f"AI · habit {pct}%",
+                                    short="You came in and it is dark",
+                                    why=f"You came in, the room is dark ({lux:.0f} lx) and you usually have it on at "
+                                        f"this time ({pct}% of the time in the last weeks)"))
+                self.stat("ai_entry_on")
+            else:
+                self.auto[dev] = dict(at=now, v=0, kind=None)   # switching it on yourself = "you got it wrong"
+                self.stat("ai_entry_skip")
+                self.sink.log("ai", "ai", f"{self.labels.get(dev, dev)} left off", device=dev, room=spec.room,
+                              short="You usually keep it off at this time",
+                              why=f"You came in and it is dark ({lux:.0f} lx), but you usually keep it off now "
+                                  f"({pct}% on in the last weeks"
+                                  + (", and you usually rest here at this time" if need > S.HABIT_ON_AT else "")
+                                  + ") — e.g. going to sleep. Switch it on if you need it; the AI learns from that.", change="No change", confidence=round(1 - u, 2),
+                              src_label="AI · habit", tags=["ai"])
 
         # 2. waste guard: the AI switched it on — did anyone come?
         for dev in list(self.guards):
@@ -504,6 +621,51 @@ class AIRuntime:
                                         f"~{saved} Wh saved over the next hour (estimate)",
                                     title=f"{self.labels.get(dev, dev)} turned off"))
 
+        # 3b. a light is on while you rest (radar sees you, the PIR has been quiet for 10 min) and at this time you
+        #     usually rest here with it off -> ask first; switch it off yourself once you said "yes" often enough
+        acted = {a["device"] for a in actions}
+        for dev, spec in self.specs.items():
+            st = devices.get(dev) or {}
+            if spec.kind != "light" or not st.get("v") or dev in acted or dev in self.guards:
+                continue
+            quiet = self.quiet_since.get(spec.room)
+            if quiet is None or now - quiet < self.minutes(S.STILL_OFF_MIN) or self.paused(dev, house, now):
+                continue
+            if now < self.snooze.get(dev, 0) or any(sg["device"] == dev for sg in self.suggestions.values()):
+                continue
+            u, rest = self.habit_use(dev, now), habits.rest_now(self.habits, spec.room, now)
+            if u is None or rest is None or u > S.HABIT_OFF_AT or rest < S.REST_AT:
+                continue
+            still_min = round((now - quiet) / 60 * self.speed)
+            why = (f"You seem to be resting: the radar sees you but there was no movement for {still_min} min, at this "
+                   f"time you usually rest here ({round(rest * 100)}%) and the light is not your habit now "
+                   f"({round(u * 100)}% on)")
+            lvl = trust.level(self.state, dev, "off_still")
+            if lvl == S.TRUST_ASK:
+                self.ask(dev, spec, "off", "off_still", 1 - u, why, rooms.get(spec.room) or {}, now,
+                         title=f"You seem to be resting — turn off the {self.labels.get(dev, dev).lower()}?")
+                continue
+            saved = energy.saved_estimate(self.watts(st, spec))
+            a = dict(device=dev, v=0, src_label="AI · learned", saved_wh=saved, confidence=round(1 - u, 2),
+                     short="You seem to be resting", why=why + " · you said yes to this before",
+                     title=f"{self.labels.get(dev, dev)} turned off")
+            actions.append(a)
+            self.ledger.record_saved("ai", saved)
+            self.stat("ai_auto_off")
+            self.automatic(dev, spec, 0, "off_still", now, a)
+
+        # 3c. automatic actions nobody undid within 10 min count as "that was right"
+        for dev in list(self.auto):
+            a = self.auto[dev]
+            if now - a["at"] > self.minutes(S.UNDO_WINDOW_MIN):
+                self.auto.pop(dev)
+                if a.get("kind"):
+                    old, new = trust.acted_ok(self.state, dev, a["kind"])
+                    self.stat("ai_auto_ok")
+                    if new > old:
+                        self.trust_changed(dev, a["kind"], new, "it did this by itself 5 times and you never undid it")
+                    self.save_state()
+
         # 4. suggestions expire after 15 min or when the situation changed
         for sid in list(self.suggestions):
             sg = self.suggestions[sid]
@@ -513,7 +675,7 @@ class AIRuntime:
             reason = None
             if spec is not None and bool(st.get("v")) == (sg["action"] == "on"):
                 # already done — usually because you said Yes (the answer is read separately), or by hand
-                self.suggestions.pop(sid)
+                self.closed[sid] = self.suggestions.pop(sid)     # the answer may still arrive: keep its kind
                 self.sink.expire_suggestion(sid, dev, sg["title"], "already done", quiet=True)
                 continue
             if spec is None:
@@ -526,8 +688,14 @@ class AIRuntime:
                     reason = f"the room changed ({why_not})"
             elif sg["action"] == "off" and spec.kind == "light" and gate.room_occupied(room) and not sg["occ"]:
                 reason = "someone came back"
+            elif sg.get("kind") == "off_still" and not gate.room_occupied(room):
+                reason = "you left the room"          # turning over in your sleep does not change the answer
+            while len(self.closed) > 50:
+                self.closed.pop(next(iter(self.closed)))
             if reason:
-                self.suggestions.pop(sid)
+                if reason.startswith("no answer"):
+                    self.snooze[dev] = now + self.minutes(S.NO_ANSWER_SNOOZE_MIN)
+                self.closed[sid] = self.suggestions.pop(sid)
                 if self.sink.expire_suggestion(sid, dev, sg["title"], reason) is not False:
                     self.stat("expired")
 
@@ -604,8 +772,19 @@ class AIRuntime:
         self.sink.patch_insights({"anomalies": self.anomalies[-10:]})
 
     # ------------------------------------------------------------------ feedback from the user
-    def on_manual(self, dev, now=None):
+    def on_manual(self, dev, now=None, v=None):
+        """You controlled it by hand (app / wall button). v = the new state, when known.
+        Reversing an automatic action within 10 min is an undo: the AI asks first again (trust ladder)."""
         now = now or self.clock()
+        a = self.auto.get(dev)
+        if a and v is not None and int(v) != a["v"] and now - a["at"] <= self.minutes(S.UNDO_WINDOW_MIN):
+            self.auto.pop(dev)
+            self.stat("ai_undone")
+            if a.get("kind"):
+                old, new = trust.undone(self.state, dev, a["kind"])
+                if new < old:
+                    self.trust_changed(dev, a["kind"], new, "you reversed what it did")
+                self.save_state()
         self.override_at[dev] = now
         self.pending.pop(dev, None)
         self.armed[dev] = False
@@ -615,12 +794,19 @@ class AIRuntime:
 
     def on_answer(self, sid, suggestion, accepted, now=None):
         now = now or self.clock()
-        info = self.suggestions.pop(sid, None) or {}
+        info = self.suggestions.pop(sid, None) or self.closed.pop(sid, None) or {}
         dev = suggestion.get("device") or info.get("device")
         if not dev:
             return
+        kind = info.get("kind")
+        if kind:                                          # trust ladder: 3 "yes" in a row -> it does it itself
+            old, lvl = trust.answered(self.state, dev, kind, accepted)
+            if lvl != old:
+                self.trust_changed(dev, kind, lvl, "you said yes 3 times in a row" if lvl > old else "you said no")
         hour = local_now(info.get("at", now)).hour
-        new = energy.adapt(self.state["offsets"], dev, hour, accepted)
+        new = None
+        if kind != "off_still":                           # the act threshold is about switching ON
+            new = energy.adapt(self.state["offsets"], dev, hour, accepted)
         self.stat("accepted" if accepted else "dismissed")
         if not accepted:
             self.snooze[dev] = now + self.minutes(60)
@@ -662,6 +848,10 @@ class AIRuntime:
                              title=p.get("title"), why=p.get("why"), reason=p.get("reason")) for d, p in self.pending.items()},
             guards={d: dict(on_at=g["on_at"], deadline=g["deadline"], p=round(g["p"], 2)) for d, g in self.guards.items()},
             smart_off=vac,
+            trust=trust.summary(self.state, self.labels),
+            habits={d: dict(use=self.habit_use(d, now), rest=habits.rest_now(self.habits, sp.room, now))
+                    for d, sp in self.specs.items() if sp.kind == "light"},
+            resting={r: t for r, t in self.quiet_since.items() if r in rooms},
             vacant_rooms={r: t for r, t in self.vacant_since.items() if r in rooms},
             plan=[{k: d.get(k) for k in ("device", "action", "p_on", "time", "title", "why", "act_at", "status")}
                   for d in self.last_decisions],

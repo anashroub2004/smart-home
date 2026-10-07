@@ -185,8 +185,15 @@
   "presence_now": { "home": false, "p_home_60": 0.86, "at": 1759300000000 },
   "energy": { "wasted_wh": 3.1, "saved_by_ai_wh": 4.8, "saved_by_rules_wh": 2.4, "wasted_by_ai_wh": 0.7, "ai_net_wh": 4.1 },
   "anomalies": [{ "device": "bedroom_fan", "kind": "high", "watts": 3.46, "usual": 1.68, "title": "Bedroom fan drawing 2.1x its usual power" }],
-  "wear": {}, "stats": { "ai_on": 12, "ai_hit": 10, "ai_miss": 2, "smart_off": 7, "accepted": 3, "dismissed": 1, "expired": 4 } }
+  "wear": {}, "stats": { "ai_on": 12, "ai_hit": 10, "ai_miss": 2, "smart_off": 7, "accepted": 3, "dismissed": 1, "expired": 4,
+                         "ai_entry_on": 9, "ai_entry_skip": 3, "ai_auto_off": 2, "ai_trusted": 2, "ai_undone": 0 },
+  "trust": [{ "device": "bedroom_light", "label": "Bedroom lights", "kind": "off_still", "level": 1,
+              "text": "switching the light off while you rest: does it and tells you", "yes": 0, "ok": 2 }] }
 ```
+
+`trust` = سلّم الثقة (إضافة 2026-10-09، اختيارية في الواجهة). `kind`: `off_still` (إطفاء الضوء وأنت مستلقٍ) · `suggest_on`
+(تشغيل في وقتك المعتاد). `level`: 0 يسأل · 1 يفعل ويُبلغك (تنبيه `info` في `/alerts`) · 2 يفعل بصمت.
+ترتفع درجة بعد 3 "نعم" متتالية (0←1) أو 5 أفعال بلا تراجع (1←2)، وتنزل درجة عند "لا" أو تراجع يدوي خلال 10 دقائق.
 
 `data_source`: `simulated` (تاريخ مولّد لبداية النظام) · `mixed` · `real` — **اعرضه في الواجهة** حتى تكون الأرقام صادقة.
 

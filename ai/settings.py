@@ -48,6 +48,24 @@ LIGHT_WINDOW_MIN = (15, 30)              # lights: armed from target-15 to targe
 HOME_RECENT_ENTRY_MIN = 30               # "someone is home" = presence anywhere or a door entry in the last 30 min
 SAVED_HORIZON_MIN = 60                   # saved Wh is estimated over the next hour (labelled as an estimate)
 
+# ---- learned habits + trust ladder (docs/updates/2026-10-09_01_trust-ladder.md)
+HABIT_AHEAD_MIN = 30                     # "do you use it in the next half hour" (from the history, per 15-min slot)
+HABIT_ON_AT = 0.30                       # entering a dark room: the AI switches the light on if habit >= 0.30
+HABIT_ON_AT_REST = 0.50                  # ... but at times you usually rest / sleep there it must be clearly your
+                                         #     habit: leaving a reader in the dark costs one press, lighting a
+                                         #     sleeper can cost the whole night
+HABIT_OFF_AT = 0.50                      # light on while you rest: only if it is NOT clearly your habit now (<= 0.50);
+                                         # 10 min without movement in a room where you usually rest is the main signal
+REST_AT = 0.80                           # "usually resting here now": the PIR was quiet in >= 80% of occupied slots
+STILL_OFF_MIN = 10                       # the PIR must also be quiet right now for 10 min (radar still sees you)
+ENTRY_WINDOW_S = 120                     # the AI decides about the light within 2 min of you walking in
+HABIT_MIN_DAYS = 7                       # a habit table needs at least a week of history
+TRUST_ASK, TRUST_NOTIFY, TRUST_SILENT = 0, 1, 2
+TRUST_PROMOTE_YES = 3                    # 3 "yes" in a row -> does it itself and tells you (with undo)
+TRUST_SILENT_AFTER = 5                   # 5 automatic actions nobody undid -> does it silently
+UNDO_WINDOW_MIN = 10                     # you reversed an automatic action within 10 min = "that was wrong"
+NO_ANSWER_SNOOZE_MIN = 30                # an unanswered question is not asked again for 30 min
+
 # ---- anomaly detection (INA226)
 ANOMALY_K = 4.0                          # median +/- 4 x MAD
 ANOMALY_HIGH_RATIO = 1.5                 # and at least 1.5x the usual draw

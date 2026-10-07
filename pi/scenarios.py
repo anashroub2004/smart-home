@@ -10,6 +10,10 @@ from pathlib import Path
 
 from person import OUT
 
+
+def json_copy(d):
+    return dict(d)
+
 REPORTS = Path(__file__).resolve().parent / "twin" / "reports"
 
 CATALOG = [
@@ -29,6 +33,9 @@ CATALOG = [
      "You press the wall button. The AI must leave that device alone for 2 hours."),
     ("power_fault", "Fan drawing double power",
      "The fan's motor is blocked (2x power). The AI must raise a power-fault alert within minutes."),
+    ("trust_ladder", "Fell asleep with the light on",
+     "At night you lie still with the light on. The AI must ask first; after you said yes 3 times it switches it off "
+     "by itself and tells you (trust ladder)."),
     ("full_day", "A whole day",
      "Runs 24 hours of the routine at 600x and reports what the AI did: switched on, correct, missed, saved, wasted."),
 ]
@@ -207,6 +214,78 @@ class ScenarioRunner:
             return False, f"switched off after {m:.1f} min while you were there"
         if m >= 15:
             return True, "light stayed on for 15 min although the PIR saw no movement (radar confirmed you)"
+
+    # ------------------------------------------------------------------ trust ladder
+    def setup_trust_ladder(self, c):
+        from ai import trust
+        spec = None
+        for dev, sp in self.ai.specs.items():           # a light in a room with radar + PIR where you usually sleep
+            keys = sp.presence_keys
+            if sp.kind == "light" and any(k.endswith("/mmwave") for k in keys) and any(k.endswith("/pir") for k in keys) \
+                    and self.ai.bundles.get(dev):
+                spec = sp
+                break
+        if not spec:
+            return self.done(False, "no AI light in a room with radar + PIR and learned habits")
+        self.clock.jump_to("01:30")
+        # pin the habits for this test ("asleep here at night, light off"): the test checks the ladder itself,
+        # not whatever this computer's twin history happens to contain
+        c["habits"] = self.ai.habits
+        pinned = {"use": dict(self.ai.habits.get("use") or {}), "rest": dict(self.ai.habits.get("rest") or {})}
+        flat = lambda v: {"days": 99, "weekday": [v] * 96, "weekend": [v] * 96}
+        pinned["use"][spec.id], pinned["rest"][spec.room] = flat(0.05), flat(0.95)
+        self.ai.habits = c["pinned"] = pinned
+        c.update(dev=spec.id, round=1, trust_saved=json_copy(trust.entry(self.ai.state, spec.id, "off_still")), log=[])
+        trust.entry(self.ai.state, spec.id, "off_still").update(level=0, yes=0, ok=0)
+        self.clear_pause(spec.id)
+        self.ai.snooze.pop(spec.id, None)                 # earlier tests may have left "don't ask again yet"
+        for sid in [k for k, sg in self.ai.suggestions.items() if sg["device"] == spec.id]:
+            self.ai.suggestions.pop(sid)
+        self.h.person.take_over(spec.room, "Sleeping")
+        self.h.person.force_still = True
+        self.set_dev(spec.id, 1)
+        c["since"] = self.now()
+        c["step"] = "night 1: asleep, light on — the AI should ask"
+
+    def check_trust_ladder(self, c, m):
+        from ai import trust
+        if self.ai.training():
+            return None                                   # nightly retraining: house time waits
+        self.ai.habits = c["pinned"]                      # a retrain reloads habits.json — keep the test's ones
+        dev, st = c["dev"], self.h.devices[c["dev"]]
+        waited = (self.now() - c["since"]) / 60
+        ask = next((sid for sid, sg in self.ai.suggestions.items() if sg["device"] == dev and sg.get("kind") == "off_still"), None)
+        if c["round"] <= 3:
+            if ask:
+                c["log"].append(f"night {c['round']}: asked after {waited:.0f} min, you said yes")
+                self.h.answer_suggestion(ask, True, "test scenario")
+                self.h.handle_suggestion_answers()
+                c["round"] += 1
+                self.set_dev(dev, 1)
+                c["since"] = self.now()
+                c["step"] = f"night {c['round']}: light on again" + (" — 3 yes: it should act by itself now" if c["round"] == 4 else "")
+            elif not st["v"]:
+                return self._ladder_end(c, False, f"night {c['round']}: switched off without asking first")
+            elif waited > 20:
+                return self._ladder_end(c, False, f"night {c['round']}: no question after 20 min")
+            return None
+        if ask:
+            return self._ladder_end(c, False, "still asking after 3 yes")
+        if not st["v"]:
+            ok = st.get("src") == "ai" and trust.level(self.ai.state, dev, "off_still") >= 1
+            c["log"].append(f"night 4: switched off by itself after {waited:.0f} min and told you")
+            return self._ladder_end(c, ok, "; ".join(c["log"]) if ok else f"switched off by {st.get('src')}")
+        if waited > 20:
+            return self._ladder_end(c, False, "night 4: did not act by itself")
+        return None
+
+    def _ladder_end(self, c, ok, detail):
+        from ai import trust
+        trust.entry(self.ai.state, c["dev"], "off_still").update(c["trust_saved"])   # leave your real ladder as it was
+        self.ai.habits = c["habits"]
+        self.ai.auto.pop(c["dev"], None)
+        self.ai.save_state()
+        return ok, detail
 
     # ------------------------------------------------------------------ 3/4. waste guard
     def _guard_setup(self, c):

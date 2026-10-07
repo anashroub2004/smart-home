@@ -13,7 +13,7 @@ from pathlib import Path
 
 PAGE = Path(__file__).resolve().parent / "twin" / "index.html"
 ALLOWED = {"speed", "pause", "resume", "jump", "move", "routine", "still", "temp", "fault", "node", "press",
-           "scenario", "scenario_stop", "wrong_pin"}
+           "scenario", "scenario_stop", "wrong_pin", "answer"}
 
 
 def start_twin(house, port=8765):
