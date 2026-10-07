@@ -63,6 +63,7 @@ class AIRuntime:
         self.snooze = {}          # device -> no new suggestion before this ts
         self.vacant_since = {}    # room -> ts
         self.house_rooms = {}     # latest room readings (for borrowed temperature / light)
+        self.last_decisions = []  # the latest plan (shown by the digital twin)
         self.ledger = energy.WasteLedger()
         self.anomalies = []
         self.last_flush = 0
@@ -127,7 +128,7 @@ class AIRuntime:
 
     def stat(self, key, n=1):
         st = self.state.setdefault("stats", {})
-        st[key] = st.get(key, 0) + n
+        st[key] = round(st.get(key, 0) + n, 3)
 
     def act_anchor(self):
         return float(self.th.get("ai_act_at", S.ACT_AT))
@@ -214,6 +215,7 @@ class AIRuntime:
             d = self.plan_device(dev, spec, slots, house, now, hour, target)
             decisions.append(d)
         self.sink.write_schedule(decisions)
+        self.last_decisions = decisions
         self.plan_presence(slots, house, now)
         self.save_state()
         return decisions
@@ -251,7 +253,10 @@ class AIRuntime:
         self.armed[dev] = action in policy.ON_ACTIONS
         room = (house.get("rooms") or {}).get(spec.room) or {}
         home = self.someone_home(house, now)
-        if action == "schedule_on":
+        pinned = (self.pending.get(dev) or {}).get("pinned")    # planned by a test scenario: leave it alone
+        if pinned:
+            pass
+        elif action == "schedule_on":
             level = self.preferred_level(spec, bundle, hour)
             old = self.pending.get(dev)
             if old:                        # already planned: keep the original time (re-planning must not
@@ -278,6 +283,9 @@ class AIRuntime:
             self.maybe_suggest(dev, spec, action, p, d["why"], room, home, now)
         else:
             self.pending.pop(dev, None)
+        if pinned:
+            d.update(action="schedule_on", title=self.pending[dev].get("title"), why=self.pending[dev]["why"],
+                     time=hhmm(max(now, self.pending[dev]["start"])))
         if paused:
             d["why"] = ("You changed it by hand — the AI leaves it alone for "
                         f"{int(self.th.get('override_pause_min', S.OVERRIDE_PAUSE_MIN) / 60)} h") if paused == "override" \
@@ -380,8 +388,17 @@ class AIRuntime:
             st = devices.get(dev) or {}
             if g["on_at"] == now:
                 continue                                    # just switched on in this tick
-            if spec is None or not st.get("v") or st.get("src") not in ("ai", None):
-                self.guards.pop(dev)                        # you or a rule took over
+            if spec is None:
+                self.guards.pop(dev)
+                continue
+            if not st.get("v") and st.get("src") == "rule":
+                # a rule switched it off in the empty room before anyone came: still a wrong prediction
+                self.guards.pop(dev)
+                self.stat("ai_miss")
+                store.write(self.con, [(int(g["on_at"]), f"ai_miss/{dev}", 1), (int(now), f"ai_miss/{dev}", 0)])
+                continue
+            if not st.get("v") or st.get("src") not in ("ai", None):
+                self.guards.pop(dev)                        # you took over
                 continue
             room = rooms.get(spec.room) or {}
             if gate.room_occupied(room):
@@ -393,6 +410,7 @@ class AIRuntime:
                 self.stat("ai_miss")
                 waited = max(1, round((now - g["on_at"]) * self.speed / 60))      # minutes in house time
                 wasted = round(self.watts(st, spec) * (now - g["on_at"]) / 3600, 2)  # real energy
+                self.stat("missed_wh", wasted)
                 store.write(self.con, [(int(g["on_at"]), f"ai_miss/{dev}", 1), (int(now), f"ai_miss/{dev}", 0)])
                 actions.append(dict(device=dev, v=0, confidence=round(g["p"], 2), src_label="AI · guard",
                                     short="Prediction missed — nobody came",
@@ -415,6 +433,7 @@ class AIRuntime:
                 saved = energy.saved_estimate(self.watts(st, spec))
                 self.ledger.record_saved("ai", saved)
                 self.stat("smart_off")
+                self.stat("saved_wh", saved)
                 self.armed[dev] = False
                 note = (" (waited longer: you usually come back)" if factor > 1 else
                         " (sooner: you usually don't need it now)" if factor < 1 else "")
@@ -484,6 +503,11 @@ class AIRuntime:
         return {"light": "You came in and it is dark", "thermal": "Pre-cooling before you need it"}.get(
             spec.kind, "Your usual time")
 
+    def guarding(self, dev):
+        """True while an AI switch-on is waiting for someone to come (pre-cooling): the 'empty room' rule
+        must wait too, otherwise it switches the pre-cooling off at once and the guard bounds the waste anyway."""
+        return dev in self.guards
+
     def waste_cause(self, dev, devices, house, now):
         st = devices.get(dev) or {}
         if dev in self.guards or st.get("src") == "ai":
@@ -548,6 +572,56 @@ class AIRuntime:
                 vals[f"power/{dev}"] = st["watts"]
         vals["mode/away"] = int(bool(house.get("away")))
         self.recorder.observe(vals, now)
+
+    # ------------------------------------------------------------------ digital twin + scenario hooks
+    def twin_view(self, house, now=None):
+        """Everything the twin page draws on the floor plan: plans, timers, open questions, energy."""
+        now = now or self.clock()
+        rooms = house.get("rooms") or {}
+        devices = house.get("devices") or {}
+        vac = {}
+        for dev, spec in self.specs.items():
+            since = self.vacant_since.get(spec.room)
+            if since is None or not (devices.get(dev) or {}).get("v") or dev in self.guards:
+                continue
+            factor = 2.0 if self.armed.get(dev) else (0.5 if self.last_p.get(dev, 0.5) <= S.SUGGEST_OFF_AT else 1.0)
+            wait = self.minutes(max(2.0, spec.off_after_min * factor))
+            vac[dev] = dict(since=since, off_at=since + wait, paused=self.paused(dev, house, now))
+        return dict(
+            pending={d: dict(start=p["start"], target=p["target"], deadline=p["deadline"], p=round(p["p"], 2),
+                             title=p.get("title"), why=p.get("why"), reason=p.get("reason")) for d, p in self.pending.items()},
+            guards={d: dict(on_at=g["on_at"], deadline=g["deadline"], p=round(g["p"], 2)) for d, g in self.guards.items()},
+            smart_off=vac,
+            vacant_rooms={r: t for r, t in self.vacant_since.items() if r in rooms},
+            plan=[{k: d.get(k) for k in ("device", "action", "p_on", "time", "title", "why", "act_at", "status")}
+                  for d in self.last_decisions],
+            suggestions={sid: dict(device=x["device"], action=x["action"], expires=x["expires"], title=x["title"],
+                                   conf=round(x["conf"], 2)) for sid, x in self.suggestions.items()},
+            paused={d: self.paused(d, house, now) for d in self.specs if self.paused(d, house, now)},
+            energy=self.ledger.totals(), stats=dict(self.state.get("stats", {})),
+            anomalies=self.anomalies[-5:], status=(self.report or {}).get("status", "learning"),
+            data_source=(self.report or {}).get("data_source"),
+        )
+
+    def inject_plan(self, dev, target, p=0.9, why="Scenario: planned by the test"):
+        """Scenario hook: pretend the model planned `dev` for `target` (used by pi/scenarios.py only)."""
+        spec = self.specs[dev]
+        start = target - self.minutes(S.LIGHT_WINDOW_MIN[0] if spec.kind == "light" else spec.lead_min)
+        deadline = target + self.minutes(S.LIGHT_WINDOW_MIN[1] if spec.kind == "light" else spec.grace_min)
+        self.pending[dev] = dict(start=start, target=target, deadline=deadline, p=p, why=why, level=None,
+                                 title=f"{self.labels.get(dev, dev)} (scenario)", pinned=True)
+        self.armed[dev] = True
+
+    def force_suggestion(self, dev, action, p, house, now=None):
+        """Scenario hook: ask the user now, through the normal path (sensors must agree)."""
+        now = now or self.clock()
+        self.house_rooms = house.get("rooms") or {}
+        spec = self.specs[dev]
+        room = self.house_rooms.get(spec.room) or {}
+        before = set(self.suggestions)
+        self.maybe_suggest(dev, spec, action, p, "Scenario: asked by the test", room, self.someone_home(house, now), now)
+        new = set(self.suggestions) - before
+        return next(iter(new), None)
 
     def summary(self):
         s = self.state.get("stats", {})

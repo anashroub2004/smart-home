@@ -72,6 +72,8 @@ def preferred_levels(slots, spec):
 
 
 def data_source(con, window_start_ts, now_ts):
+    if store.get_meta(con, "all_simulated") == "1":       # the simulator records its own (simulated) readings
+        return "simulated"
     synth_until = store.get_meta(con, "synth_until")
     if synth_until is None or float(synth_until) < window_start_ts:
         return "real"

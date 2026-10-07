@@ -13,6 +13,10 @@ Run (with the Firebase emulators already running):
     python pi/sim_house.py --fault living_light:dead  # kinds: high (default) | dead | standby
     python pi/sim_house.py --no-ai         # run without the AI
 
+Digital twin (open http://localhost:8765 while it runs — the house from above, the person, the AI's mind):
+    python pi/sim_house.py --twin-only --speed 60    # no Firebase at all: any speed, scenarios, no quota
+    python pi/sim_house.py --cloud KEY --speed 1     # the twin next to the real web app (keep speed 1 there)
+
 What it does:
     - seeds /config from docs/seed.json and creates the owner login (owner@home.test / password123)
     - every tick: executes /commands (done/failed + event), writes /home_state and /nodes
@@ -20,6 +24,7 @@ What it does:
     - AI: the REAL model from ai/ (ai.runtime.AIRuntime) — plan every 15 min, sensor gate, waste guard,
       smart off, suggestion expiry, energy faults, waste ledger. A fresh install gets simulated history
       (labelled "simulated") so the models are ready on day one. Needs: pip install -r ai/requirements.txt
+    - a person (pi/person.py) follows the routine from ai/routine.py: presence, doors, TV, light switches
     - door: fingerprint / keypad / exit button / wrong PINs / lockout, entrance motion + camera clips
     - /alerts for the Activity screen, /summaries + /energy_daily every minute
 The simulator itself uses the Python standard library; the AI needs numpy/pandas/scikit-learn.
@@ -27,29 +32,40 @@ The simulator itself uses the Python standard library; the AI needs numpy/pandas
 import argparse
 import json
 import math
+import queue
 import random
 import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from firebase_writer import Writer, day_key, now_ms  # noqa: E402
-from rest_db import PROJECT_ID, RestDB  # noqa: E402
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import firebase_writer  # noqa: E402
+from firebase_writer import Writer, day_key, now_ms  # noqa: E402
+from person import OUT, Person  # noqa: E402
+from rest_db import PROJECT_ID, RestDB  # noqa: E402
+from sim_clock import VirtualClock  # noqa: E402
+
+CLOCK = VirtualClock()                       # every part of the simulator reads this clock
+firebase_writer.set_clock(CLOCK.now)         # timestamps written to Firebase follow it too
 SEED = ROOT / "docs" / "seed.json"
 AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
-TICK_S = 0.5
+TICK_S = 0.25
 BASE_W = 6.8            # Raspberry Pi + 3 ESP32 nodes + sensors
 
 
+def vnow():
+    return datetime.fromtimestamp(CLOCK.now())
+
+
 def hhmm(dt=None):
-    return (dt or datetime.now()).strftime("%H:%M")
+    return (dt or vnow()).strftime("%H:%M")
 
 
 # ---------------------------------------------------------------- setup
@@ -103,7 +119,7 @@ def seed(w, reset, cloud=False):
 def backfill_energy(w, config):
     """6 days of fake energy history so the Energy chart is not empty on day one."""
     for d in range(1, 7):
-        day = day_key(time.time() - d * 86400)
+        day = day_key(CLOCK.now() - d * 86400)
         if w.get_energy_day(day):
             continue
         per = {"_base": BASE_W * 24 * random.uniform(0.97, 1.03)}
@@ -132,7 +148,8 @@ def load_ai(args):
 class House:
     def __init__(self, w, config, args):
         self.w, self.args = w, args
-        self.speedup = 10 if args.fast else 1
+        # --fast (old mode): real clock, rule timers 10x shorter. --speed N: a virtual clock N times faster.
+        self.speedup = 10 if args.fast and not args.speed else 1
         self.offline = set(args.offline or [])
         self.override_until = {}         # device -> ts; manual control pauses AI/rules
         self.empty_since = {}            # room -> ts
@@ -152,6 +169,15 @@ class House:
         self.faults = dict(f.split(":", 1) if ":" in f else (f, "high") for f in (args.fault or []))
         self.ai = None                   # ai.runtime.AIRuntime (the real model) — set by start_ai()
         self.next_train = 0
+        self.person = Person(config)
+        self.temp_delta = 0.0            # twin control: hotter / cooler day
+        self.recent = deque(maxlen=80)   # latest events for the twin page
+        self.changes = deque(maxlen=4000)  # (ts, kind, id, value) today: device on/off + person room, for the timeline
+        self.commands = queue.Queue()    # from the twin page
+        self.counts = {}                 # "rule_on", "ai_off", "manual_off", ... (who switched what, for the twin)
+        self.twin_json = b"{}"
+        self.scenarios = None            # pi/scenarios.py runner (set in main)
+        self._wrap_writer()
         # the real Firebase free plan has a download quota, so poll it less often than the local emulator
         self.poll_s = 1.0 if args.cloud else TICK_S
         self.config_poll_s = 10.0 if args.cloud else TICK_S
@@ -159,8 +185,27 @@ class House:
         for n in config["nodes"]:
             self.node_version[n] = config["version"]
 
+    def _wrap_writer(self):
+        """Keep a copy of every event / alert for the twin page (the Firebase writes stay unchanged)."""
+        log, alert = self.w.log_event, self.w.push_alert
+
+        def log_event(kind, group, title, source, src_label, result="ok", **fields):
+            self.recent.appendleft({"at": now_ms(), "kind": kind, "group": group, "title": title, "src": src_label,
+                                    "result": result, "short": fields.get("short"), "why": fields.get("why"),
+                                    "device": fields.get("device")})
+            return log(kind, group, title, source, src_label, result, **fields)
+
+        def push_alert(level, title, where, go, lines=None):
+            self.recent.appendleft({"at": now_ms(), "kind": "alert", "group": "alert", "title": title, "src": level,
+                                    "result": "ok", "short": where})
+            return alert(level, title, where, go, lines)
+
+        self.w.log_event, self.w.push_alert = log_event, push_alert
+
     def load_config(self, config):
         self.config = config
+        if hasattr(self, "person"):
+            self.person.set_config(config)
         self.th = config["thresholds"]
         self.dev_cfg, self.dev_room = {}, {}
         for rid, room in config["rooms"].items():
@@ -242,9 +287,9 @@ class House:
 
     # ------------------------------------------------ sensors
     def update_sensors(self):
-        now = datetime.now()
+        now = vnow()
         h = now.hour + now.minute / 60
-        outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi)
+        outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi) + self.temp_delta
         daylight = max(0.0, math.sin((h - 6) / 13 * math.pi)) if 6 <= h <= 19 else 0
         for rid, room in self.config["rooms"].items():
             if room["node"] in self.offline:
@@ -252,21 +297,18 @@ class House:
             s = self.rooms[rid]
             sensors = room.get("sensors", [])
             if "occ" in sensors:
-                # someone tends to be in the living room by day and the bedroom at night
-                likely = 0.6 if (rid == "living" and 8 <= h < 23) or (rid == "bedroom" and (h >= 23 or h < 8)) else 0.12
-                if random.random() < 0.03 * self.speedup:
-                    new = int(random.random() < likely)
-                    if new and not s.get("occ"):
-                        s["motion_at"] = now_ms()
-                    if new != s.get("occ"):
-                        s["occ_since"] = now_ms()
-                    s["occ"] = new
-                    s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
+                new = int(self.person.room == rid)            # the simulated person is in this room
+                if new and not s.get("occ"):
+                    s["motion_at"] = now_ms()
+                if new != s.get("occ"):
+                    s["occ_since"] = now_ms()
+                s["occ"] = new
+                s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
                 hw = room.get("hardware", [])
                 if "C1001 mmWave" in hw:
-                    s["mmwave"] = s.get("occ", 0)               # the radar also sees people sitting still
+                    s["mmwave"] = new                            # the radar also sees people sitting still
                 if "PIR" in hw:                                  # PIR only sees movement: it misses still people
-                    s["pir"] = int(bool(s.get("occ")) and random.random() < 0.75)
+                    s["pir"] = int(bool(new) and random.random() > self.person.still)
             devs = room.get("devices") or {}
             if "temp" in sensors:
                 fan_cool = -1.2 if any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs) else 0
@@ -309,6 +351,10 @@ class House:
         before_label = self.state_label(device, st)
         level_only = bool(caps.get("level") and st["v"] and v and level and level != st.get("level"))
         mode_only = bool(caps.get("mode") and st["v"] and v and mode and mode != st.get("mode"))
+        if int(v) != st.get("v"):
+            self.changes.append((CLOCK.now(), "dev", device, int(v)))
+            key = f"{group}_{'on' if v else 'off'}"
+            self.counts[key] = self.counts.get(key, 0) + 1
         st.update(v=int(v), src=source, at=now_ms())
         if level is not None and caps.get("level"):
             st["level"] = int(level)
@@ -319,7 +365,7 @@ class House:
         after = {k: st.get(k) for k in keys if st.get(k) is not None}
         after_label = self.state_label(device, st)
         if source in ("web", "button"):
-            self.override_until[device] = time.time() + self.th["override_pause_min"] * 60 / self.speedup
+            self.override_until[device] = CLOCK.now() + self.th["override_pause_min"] * 60 / self.speedup
             if self.ai:
                 self.ai_safe(self.ai.on_manual, device)
         if title is None:
@@ -348,7 +394,7 @@ class House:
             if device not in self.dev_cfg:
                 self.w.ack_command(device, False, "unknown device")
                 continue
-            cfg = self.dev_cfg[device]
+            self.dev_cfg[device]
             scene = cmd.get("scene")
             scene_name = (self.config.get("scenes", {}).get(scene) or {}).get("name", scene) if scene else None
             via_sugg = cmd.get("via") == "suggestion"
@@ -381,7 +427,7 @@ class House:
                 self.w.ack_command(device, False, fail)
                 st = self.devices[device]
                 lock = self.is_lock(device)
-                title = (f"Remote unlock failed" if lock else
+                title = ("Remote unlock failed" if lock else
                          f"{self.label(device)} {'turned on' if cmd.get('v') else 'turned off'}")
                 self.w.log_event("door" if lock else "device",
                                  "door" if lock else meta["group"], title, meta["source"],
@@ -419,10 +465,10 @@ class House:
                         latency_ms=latency or random.randint(150, 700), tags=["door"] + (["manual"] if method == "web" else []))
         self.door["last_open"] = {"at": now_ms(), "method": method, **({"who": who} if who else {})}
         if method in ("fingerprint", "keypad", "web"):
-            self.door_entry_at = time.time()
+            self.door_entry_at = CLOCK.now()
             if self.ai and self.ai.recorder:
                 self.ai_safe(self.ai.recorder.event, "door/entry")
-        self.lock_at = time.time() + 5
+        self.lock_at = CLOCK.now() + 5
 
     def fingerprints(self):
         """{finger id: name}. Firebase turns objects with keys "1","2",... into arrays, so accept both."""
@@ -461,23 +507,8 @@ class House:
                                              f"Keypad is blocked for {secs} s. Motion clip was saved."])
         self.entrance_motion()
 
-    def door_activity(self):
-        if "door" in self.offline or not self.lock_id:
-            return
-        r = random.random()
-        if r < 0.45:
-            fingers = self.fingerprints()
-            finger = random.choice(list(fingers))
-            self.open_door("fingerprint", fingers[finger], finger=finger)
-        elif r < 0.6:
-            self.open_door("keypad")
-        elif r < 0.8:
-            self.open_door("exit_button")
-        else:
-            self.wrong_attempt(random.choice(["keypad", "keypad", "fingerprint"]))
-
     def entrance_motion(self):
-        now = datetime.now()
+        now = vnow()
         self.w.log_event("motion", "system", "Motion at the front door", "system", "Camera",
                          room="entrance", node="hub", by_label="Outdoor PIR on the hub",
                          short="15 s clip saved", why="Motion detected by the outdoor PIR",
@@ -487,7 +518,7 @@ class House:
     # ------------------------------------------------ automation rules
     def paused(self, device):
         """AI + comfort rules leave the device alone after manual control, or while the user paused it."""
-        return time.time() < self.override_until.get(device, 0) or self.user_paused(device)
+        return CLOCK.now() < self.override_until.get(device, 0) or self.user_paused(device)
 
     def user_paused(self, device):
         """Explicit pause switch in the device sheet (/ai_pause/{device} = until ms)."""
@@ -509,7 +540,7 @@ class House:
 
     def apply_rules(self):
         """Per-device rules from config (device.rules), only for devices with control.rules = true."""
-        t = time.time()
+        t = CLOCK.now()
         th = self.th
         for rid, room in self.config["rooms"].items():
             if room["node"] in self.offline:
@@ -526,7 +557,8 @@ class House:
                 empty_min = th["empty_room_off_min"]
                 empty_for = t - self.empty_since.get(rid, t)
                 rule = dict(source="rule", src_label="Rule", group="rule", by_label="Automation", tags=["rule"])
-                if r.get("off_when_empty") and st["v"] and not self.user_paused(dev) \
+                guarded = bool(self.ai and self.ai_safe(self.ai.guarding, dev))   # AI pre-cooling: its guard decides
+                if r.get("off_when_empty") and st["v"] and not self.user_paused(dev) and not guarded \
                         and empty_for > empty_min * 60 / self.speedup:
                     saved = round(float(st.get("watts") or cfg.get("watts", 0)), 2)   # estimate over the next hour
                     if self.ai:
@@ -537,7 +569,9 @@ class House:
                                       f"{room['name']} · empty for {empty_min} min · saved {saved} Wh", "energy")
                 elif self.paused(dev) or not s.get("occ"):
                     continue
-                elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"]:
+                elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"] \
+                        and t - s.get("occ_since", 0) / 1000 < 90:
+                    # only when someone has just come in: a person sleeping or who switched it off stays in the dark
                     self.set_device(dev, 1, self.mid_level(dev), short=f"Light below {th['light_on_lux']} lx",
                                     why=f'Rule "On below {th["light_on_lux"]} lx" · light {s.get("lux")} lx · someone in the room', **rule)
                 elif r.get("follow_temp") and not st["v"] and s.get("temp", 0) > th["fan_on_temp"]:
@@ -556,7 +590,6 @@ class House:
     def simulate_monitored(self):
         """Devices we only READ (TV, fridge, ...): their on/off comes from the current they draw.
         Here we fake that current; on the Pi it comes from the INA226 (on when watts > hw.on_above_w)."""
-        h = datetime.now().hour
         for dev, cfg in self.dev_cfg.items():
             if self.writable(dev) or self.is_lock(dev) or self.node_of(dev) in self.offline:
                 continue
@@ -567,9 +600,8 @@ class House:
             if icon == "fridge":     # always on; a rare power cut, back after a few minutes
                 want = (0 if random.random() < 0.0004 * self.speedup else 1) if st["v"] else \
                        (1 if random.random() < 0.01 * self.speedup else 0)
-            elif icon == "tv":       # evenings, when someone is in the room
-                target = 1 if occ and (h >= 18 or h < 1) else 0
-                want = target if random.random() < 0.01 * self.speedup else st["v"]
+            elif icon == "tv":       # on while the person is watching TV in this room
+                want = 1 if occ and "TV" in self.person.activity else 0
             else:
                 want = 1 - st["v"] if random.random() < 0.002 * self.speedup else st["v"]
             if want != st["v"]:
@@ -598,16 +630,24 @@ class House:
     def start_ai(self, ai_parts, cloud=False):
         """Create the AI runtime, bootstrap history if the hub is new, train if needed."""
         AIRuntime, FirebaseSink, ai_store = ai_parts
-        name = "sim_cloud" if cloud else "sim"
+        name = "sim_cloud" if cloud else ("twin" if self.args.twin_only else "sim")
         con = ai_store.connect(ROOT / "ai" / "data" / f"{name}.db")
+        last = con.execute("SELECT MAX(ts) FROM readings").fetchone()[0]
+        if last and last > CLOCK.now():
+            # the twin ran ahead of real time last session: continue from there so the history stays in order
+            CLOCK.forward(last - CLOCK.now() + 60)
+            print(f"virtual clock continues from the last session: {hhmm()} on {vnow():%a %d %b}")
         sink = FirebaseSink(self.w, room_of=lambda d: self.dev_room.get(d),
                             room_name=lambda r: self.config["rooms"].get(r, {}).get("name", r))
         self.ai = AIRuntime(self.config, con, sink, model_dir=ROOT / "ai" / "models" / name,
-                            speed=self.speedup, record=True)
+                            speed=self.speedup, record=True, clock=CLOCK.now)
+        ai_store.set_meta(con, "all_simulated", "1")    # every reading here is simulated — say so in the metrics
         self.clean_suggestions(keep_open=False)        # open ones from an earlier run can't be tracked
         t0 = time.time()
+        CLOCK.pause()                                  # training takes seconds: the virtual day waits
         self.ai_safe(self.ai.bootstrap_if_needed)
-        self.next_train = time.time() + 86400 / self.speedup
+        CLOCK.resume()
+        self.next_train = self.next_3am()
         if self.ai:
             print(f"AI ready in {time.time() - t0:.0f} s · models in ai/models/{name} · "
                   f"{self.ai.report.get('data_source', '?')} data")
@@ -637,12 +677,20 @@ class House:
             if (s.get("handled") and s.get("at", 0) < day_ago) or (not keep_open and not s.get("response")):
                 self.w.delete_suggestion(sid)
 
+    def next_3am(self):
+        if self.speedup > 1:                          # old --fast mode: every 2.4 h
+            return CLOCK.now() + 86400 / self.speedup
+        t = vnow().replace(hour=3, minute=0, second=0, microsecond=0)
+        return (t if t > vnow() else t + timedelta(days=1)).timestamp()
+
     def run_ai(self):
         if not self.ai:
             return
-        if time.time() >= self.next_train:            # nightly retraining (every 2.4 h with --fast)
-            self.next_train = time.time() + 86400 / self.speedup
+        if CLOCK.now() >= self.next_train:            # nightly retraining at 03:00 (virtual clock)
+            self.next_train = self.next_3am()
+            CLOCK.pause()
             self.ai_safe(self.ai.retrain, quiet=True)
+            CLOCK.resume()
             self.clean_suggestions()
         self.ai_safe(self.ai.plan, self.house_snapshot())
 
@@ -710,20 +758,140 @@ class House:
             if n not in self.offline:
                 self.node_version[n] = cfg["version"]
 
-    # ------------------------------------------------ random life: buttons, entrance motion
-    def random_life(self):
-        if random.random() < 0.3:  # someone presses a wall button
-            choices = [d for d in self.dev_cfg if self.writable(d) and self.ctrl(d).get("button")]
-            if not choices:
+    # ------------------------------------------------ the person (digital twin)
+    def person_tick(self):
+        """Move the person along today's routine; doors, light switches and the TV follow what he does."""
+        moved = self.person.step(CLOCK.now())
+        if not moved:
+            return
+        old, new = moved
+        self.changes.append((CLOCK.now(), "room", "person", new))
+        if self.person.activity == "Sleeping" and new and new != OUT:
+            self.leave_room_habits(new, always=True, lights_only=True)   # lights off before sleeping
+        if old and old != OUT and self.person.habits:
+            self.leave_room_habits(old)
+        if new == OUT and old is not None:                     # leaving: exit button, camera sees him
+            if self.lock_id and "door" not in self.offline:
+                self.open_door("exit_button")
+            self.entrance_motion()
+        elif old == OUT:                                       # coming home: fingerprint
+            if self.lock_id and "door" not in self.offline:
+                fingers = self.fingerprints()
+                finger = next(iter(fingers))
+                self.open_door("fingerprint", fingers[finger], finger=finger)
+            else:
+                self.door_entry_at = CLOCK.now()
+            self.entrance_motion()
+
+    def leave_room_habits(self, rid, always=False, lights_only=False):
+        """Like a real person: usually switches the light off when leaving, sometimes forgets (the AI's job)."""
+        for dev in (self.config["rooms"].get(rid, {}).get("devices") or {}):
+            if lights_only and self.icon(dev) != "light":
+                continue
+            st = self.devices.get(dev) or {}
+            if not st.get("v") or not self.writable(dev) or not self.ctrl(dev).get("button"):
+                continue
+            if self.node_of(dev) in self.offline:
+                continue
+            chance = 1.0 if always else 0.6 if self.icon(dev) == "light" else 0.3
+            if random.random() < chance:
+                self.set_device(dev, 0, source="button", src_label="Button", group="manual",
+                                by_label="Someone at home (button)",
+                                short=f"Wall button in the {self.room_name(rid).lower()}",
+                                why="Switched off before sleeping" if always else "Switched off when leaving the room",
+                                tags=["manual"])
+
+    def press_button(self, dev):
+        """Twin control: the person presses a wall button."""
+        if dev not in self.dev_cfg or not self.writable(dev):
+            return
+        on = not self.devices[dev]["v"]
+        self.set_device(dev, int(on), self.mid_level(dev) if on else None, source="button", src_label="Button",
+                        group="manual", by_label="Someone at home (button)",
+                        short=f"Wall button in the {self.room_name(self.dev_room[dev]).lower()}",
+                        why="Pressed from the digital twin", tags=["manual"])
+
+    # ------------------------------------------------ digital twin: commands + state for the page
+    def handle_twin_commands(self):
+        while True:
+            try:
+                c = self.commands.get_nowait()
+            except queue.Empty:
                 return
-            dev = random.choice(choices)
-            node = self.node_of(dev)
-            if node not in self.offline:
-                self.set_device(dev, 0 if self.devices[dev]["v"] else 1, None if self.devices[dev]["v"] else self.mid_level(dev),
-                                source="button", src_label="Button",
-                                group="manual", by_label="Someone at home (button)",
-                                short=f"Wall button in the {self.room_name(self.dev_room[dev]).lower()}",
-                                why=f"Physical button on the {node} node", tags=["manual"])
+            try:
+                self.twin_command(c)
+            except Exception as e:  # noqa: BLE001 — a bad command must never stop the house
+                print(f"! twin command {c}: {e}")
+
+    def twin_command(self, c):
+        a = c.get("action")
+        if a == "speed":
+            CLOCK.set_speed(float(c["value"]))
+        elif a == "pause":
+            CLOCK.pause()
+        elif a == "resume":
+            CLOCK.resume()
+        elif a == "jump":
+            CLOCK.jump_to(c["time"])
+        elif a == "move":
+            self.person.take_over(c["room"])
+        elif a == "routine":
+            self.person.give_back()
+        elif a == "still":
+            self.person.force_still = bool(c["on"]) if c.get("on") is not None else None
+        elif a == "temp":
+            self.temp_delta = float(c["delta"])
+        elif a == "fault":
+            if c.get("kind"):
+                self.faults[c["device"]] = c["kind"]
+            else:
+                self.faults.pop(c["device"], None)
+        elif a == "node":
+            (self.offline.add if c.get("offline") else self.offline.discard)(c["node"])
+        elif a == "press":
+            self.press_button(c["device"])
+        elif a == "scenario" and self.scenarios:
+            self.scenarios.start(c["id"])
+        elif a == "scenario_stop" and self.scenarios:
+            self.scenarios.stop()
+        elif a == "wrong_pin":
+            self.wrong_attempt("keypad")
+
+    def twin_state(self):
+        now = CLOCK.now()
+        house = self.house_snapshot()
+        seg = self.person.plan_now(now)
+        day0 = vnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        rooms = {}
+        for rid, rc in self.config["rooms"].items():
+            rooms[rid] = {"name": rc.get("name", rid), "hidden": bool(rc.get("hidden")), "node": rc.get("node"),
+                          "offline": rc.get("node") in self.offline, "sensors": rc.get("sensors") or [],
+                          "hardware": rc.get("hardware") or [], **{k: v for k, v in self.rooms.get(rid, {}).items()
+                                                                   if k in ("occ", "mmwave", "pir", "temp", "lux", "hum")}}
+        devices = {}
+        for dev, cfg in self.dev_cfg.items():
+            st = self.devices[dev]
+            devices[dev] = {"room": self.dev_room[dev], "label": self.label(dev), "icon": self.icon(dev),
+                            "v": st.get("v"), "level": st.get("level"), "watts": st.get("watts"), "src": st.get("src"),
+                            "write": self.writable(dev), "ai": bool(self.ctrl(dev).get("ai")),
+                            "button": bool(self.ctrl(dev).get("button")), "fault": self.faults.get(dev),
+                            "paused": self.paused(dev), "state": self.state_label(dev, st)}
+        state = {
+            "now": now, "day0": day0, "speed": CLOCK.speed, "paused": CLOCK.paused, "legacy_fast": self.speedup > 1,
+            "mode": "twin-only" if self.args.twin_only else ("cloud" if self.args.cloud else "emulator"),
+            "person": {"room": self.person.room, "activity": self.person.activity, "still": self.person.still,
+                       "manual": bool(self.person.manual), "force_still": self.person.force_still,
+                       "moved_at": self.person.moved_at, "path": self.person.path,
+                       "next": {"start": seg[0], "end": seg[1]}},
+            "routine": [list(x) for x in self.person.segments(now)],
+            "rooms": rooms, "devices": devices, "temp_delta": self.temp_delta,
+            "door": {"entry_at": self.door_entry_at, "lockout_until": self.door.get("lockout_until", 0)},
+            "events": list(self.recent)[:40],
+            "changes": [c for c in self.changes if c[0] >= day0 - 3600],
+            "ai": self.ai_safe(self.ai.twin_view, house, now) if self.ai else None,
+            "scenarios": self.scenarios.view() if self.scenarios else None,
+        }
+        self.twin_json = json.dumps(state, default=str).encode()
 
     # ------------------------------------------------ periodic writes
     def write_state(self, power):
@@ -735,7 +903,7 @@ class House:
                             rssi=random.randint(-72, -48))
 
     def write_summary(self):
-        ts = time.time()
+        ts = CLOCK.now()
         for rid, s in self.rooms.items():
             room = self.config["rooms"][rid]
             if not room.get("sensors") or room["node"] in self.offline:
@@ -754,8 +922,8 @@ class House:
 
     # ------------------------------------------------ main loop
     def run(self):
-        print(f"house running  fast={self.args.fast}  offline={sorted(self.offline) or '-'}  "
-              f"fail_rate={self.args.fail_rate}   Ctrl+C to stop")
+        print(f"house running  speed={CLOCK.speed:g}x{'  (old --fast timers)' if self.speedup > 1 else ''}  "
+              f"offline={sorted(self.offline) or '-'}  fail_rate={self.args.fail_rate}   Ctrl+C to stop")
         for node in self.offline:
             rooms = " & ".join(r["name"] for r in self.config["rooms"].values() if r["node"] == node and not r.get("hidden"))
             self.w.log_event("node", "system", f"{self.node_name(node)} went offline", "system", "System",
@@ -765,52 +933,57 @@ class House:
         if self.args.lockout:
             for _ in range(self.th["door_lockout_attempts"]):
                 self.wrong_attempt("keypad")
-        last_tick = time.time()
         sp = self.speedup
+        last_tick = CLOCK.now()
+        real = {}                                  # real-time throttles: the free Firebase plan has a quota
+        state_real_s = 1.0 if self.args.cloud else 0.5
+        summary_real_s = 5.0 if self.args.cloud else 0.5
         while True:
-            t = time.time()
-            dt, last_tick = t - last_tick, t
+            r = time.time()
             try:
-                if t - self.last.get("cmd", 0) >= self.poll_s:
-                    self.last["cmd"] = t
+                self.handle_twin_commands()
+                t = CLOCK.now()
+                dt, last_tick = max(0.0, t - last_tick), t
+                if r - real.get("cmd", 0) >= self.poll_s:
+                    real["cmd"] = r
                     self.handle_commands()
-                if t - self.last.get("cfg", 0) >= self.config_poll_s:
-                    self.last["cfg"] = t
+                if r - real.get("cfg", 0) >= self.config_poll_s:
+                    real["cfg"] = r
                     cfg = self.w.get_config()
                     if cfg and json.dumps(cfg, sort_keys=True) != json.dumps(self.config, sort_keys=True):
                         self.apply_config(cfg)
                 if t - self.last["state"] >= 5 / sp:
                     self.last["state"] = t
-                    self.sync_ai_pause()
+                    if r - real.get("pause", 0) >= self.poll_s:
+                        real["pause"] = r
+                        self.sync_ai_pause()
+                    self.person_tick()
                     self.update_sensors()
                     self.simulate_monitored()
                     self.apply_rules()
-                    power = self.update_power(dt if dt < 60 else 0)
+                    power = self.update_power(dt if dt < 3600 else 0)
                     if self.ai and self.ai.suggestions:   # read answers first, so "Yes" is never seen as expired
                         self.handle_suggestion_answers()
                     self.ai_tick(t - self.last.get("ai_tick", t))
                     self.last["ai_tick"] = t
-                    self.write_state(power)
+                    if self.scenarios:
+                        self.scenarios.tick()
+                    if r - real.get("state", 0) >= state_real_s:
+                        real["state"] = r
+                        self.write_state(power)
                 else:
-                    self.update_power(dt if dt < 60 else 0)
-                if t - self.last["sugg"] >= 2:
-                    self.last["sugg"] = t
+                    self.update_power(dt if dt < 3600 else 0)
+                if r - real.get("sugg", 0) >= 2:
+                    real["sugg"] = r
                     self.handle_suggestion_answers()
-                if t - self.last["summary"] >= 60 / sp:
+                if t - self.last["summary"] >= 60 / sp and r - real.get("summary", 0) >= summary_real_s:
                     self.last["summary"] = t
+                    real["summary"] = r
                     self.write_summary()
                 if t - self.last["ai"] >= 900 / sp:
                     self.last["ai"] = t
                     self.run_ai()
-                if t - self.last["random"] >= 120 / sp:
-                    self.last["random"] = t
-                    self.random_life()
-                if t - self.last["door"] >= 300 / sp:
-                    self.last["door"] = t
-                    self.door_activity()
-                if t - self.last["motion"] >= 400 / sp and random.random() < 0.5:
-                    self.last["motion"] = t
-                    self.entrance_motion()
+                self.twin_state()
             except (RuntimeError, OSError) as e:
                 hint = "check your internet / key" if self.args.cloud else "are the emulators running? `firebase emulators:start`"
                 print(f"! {e}  ({hint})")
@@ -832,9 +1005,25 @@ def main():
     ap.add_argument("--fault", action="append", metavar="DEVICE[:KIND]",
                     help="simulate an energy fault: high (2x power, default), dead (no power), standby (power while off)")
     ap.add_argument("--no-ai", action="store_true", help="run without the AI")
+    ap.add_argument("--speed", type=float, default=0, metavar="N",
+                    help="virtual clock N times faster than real time (60 = one hour per minute)")
+    ap.add_argument("--twin-only", action="store_true",
+                    help="digital twin without Firebase (in memory): any speed, scenarios, no quota")
+    ap.add_argument("--twin-port", type=int, default=8765, help="port of the digital twin page (default 8765)")
+    ap.add_argument("--no-twin", action="store_true", help="don't start the digital twin page")
     args = ap.parse_args()
+    if args.speed:
+        CLOCK.set_speed(args.speed)
+    if args.cloud and args.twin_only:
+        sys.exit("--twin-only runs without Firebase; drop --cloud")
+    if args.cloud and CLOCK.speed > 10:
+        print("! with the real Firebase keep --speed at 10 or less (free quota). For fast tests use --twin-only.")
 
-    if args.cloud:
+    if args.twin_only:
+        from memory_db import MemoryDB
+        w = Writer(MemoryDB())
+        print("digital twin only · no Firebase (everything stays in memory)")
+    elif args.cloud:
         from cloud_db import cloud_db
         w = Writer(cloud_db(args.cloud))
         print(f"REAL Firebase · project {w.db.project_id} · {w.db.base}")
@@ -850,7 +1039,9 @@ def main():
         if args.cloud:
             sys.exit(f"Cannot reach the real database: {e}")
         sys.exit(f"Cannot reach the Database emulator: {e}\nStart it first:  firebase emulators:start")
-    if args.cloud:
+    if args.twin_only:
+        pass
+    elif args.cloud:
         if args.owner_uid:
             w.db.put(f"users/{args.owner_uid}", {"role": "owner", "name": "Owner"})
             print(f"owner role set for {args.owner_uid}")
@@ -874,6 +1065,13 @@ def main():
     if not house.ai:
         w.write_ai_insights({"status": "off"})
     house.run_ai()
+    if not args.no_twin:
+        from scenarios import ScenarioRunner
+        from twin_server import start_twin
+        house.scenarios = ScenarioRunner(house, CLOCK)
+        house.twin_state()
+        url = start_twin(house, args.twin_port)
+        print(f"digital twin: {url}")
     try:
         house.run()
     except KeyboardInterrupt:

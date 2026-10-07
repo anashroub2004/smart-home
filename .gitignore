@@ -33,3 +33,4 @@ database-debug.log
 .DS_Store
 Thumbs.db
 .idea/
+pi/twin/reports/

@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digital twin · Smart home</title>
+<style>
+  :root{--bg:#0E0F12;--surface:#16181C;--tile:#1A1C20;--border:#24272C;--text:#F2F3F5;--muted:#9BA1AA;--dim:#6E747D;
+        --accent:#8FB8FF;--fan:#2BB3A3;--light:#F5A524;--good:#34C759;--warn:#FFB020;--bad:#FF5A52;--person:#C792EA}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .num{font-variant-numeric:tabular-nums}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:14px 22px;padding:14px 20px;border-bottom:1px solid var(--border);background:#111216;position:sticky;top:0;z-index:5}
+  .brand{font-weight:700;font-size:16px;display:flex;align-items:center;gap:10px}
+  .badge{font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;background:#1F2227;color:var(--muted)}
+  .clock{display:flex;align-items:baseline;gap:10px}
+  .clock .t{font-size:30px;font-weight:700;letter-spacing:-.02em}
+  .clock .d{color:var(--muted)}
+  .seg{display:inline-flex;background:#1B1D22;border:1px solid var(--border);border-radius:10px;padding:3px;gap:2px}
+  .seg button{background:none;border:0;padding:5px 10px;border-radius:7px;color:var(--muted);font-weight:600}
+  .seg button.on{background:#2A2E35;color:var(--text)}
+  .lbl{font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-right:4px}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;padding:18px 20px;align-items:start}
+  @media (max-width:1100px){main{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 16px}
+  .card h3{margin:0 0 10px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  #plan{width:100%;height:auto;display:block}
+  .room-name{fill:var(--text);font-weight:700;font-size:17px}
+  .room-sub{fill:var(--muted);font-size:13px}
+  .devlabel{fill:#D5D9DF;font-size:12.5px;font-weight:600}
+  .devstate{fill:var(--muted);font-size:11.5px}
+  .ai-tag{font-size:11.5px;font-weight:700}
+  .spin{transform-box:fill-box;transform-origin:center;animation:spin var(--spd,1s) linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .pulse{animation:pulse 1.2s ease-out infinite}
+  @keyframes pulse{0%{opacity:1}100%{opacity:.15}}
+  .clickable{cursor:pointer}
+  .tabs{display:flex;gap:4px;margin-bottom:12px;background:#1B1D22;border-radius:12px;padding:3px}
+  .tabs button{flex:1;border:0;background:none;padding:7px 4px;border-radius:9px;color:var(--muted);font-weight:600}
+  .tabs button.on{background:#2A2E35;color:var(--text)}
+  .row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--border)}
+  .row:first-child{border-top:0}
+  .muted{color:var(--muted)} .small{font-size:12.5px}
+  .chip{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;background:#1F2227}
+  .bar{height:6px;border-radius:3px;background:#262A30;overflow:hidden;width:90px;flex:none;margin-top:7px}
+  .bar>span{display:block;height:100%;background:var(--accent)}
+  .btn{background:#22252B;border:1px solid #2E3238;border-radius:10px;padding:7px 12px;font-weight:600}
+  .btn:hover{background:#2A2E35}
+  .btn.pri{background:#ECEEF1;color:#111;border-color:#ECEEF1}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+  .metrics b{display:block;font-size:20px}
+  .metrics span{font-size:12px;color:var(--muted)}
+  .pass{color:var(--good)} .fail{color:var(--bad)}
+  #timeline{width:100%;height:auto;display:block}
+  .banner{background:#2A2210;color:var(--warn);border-radius:12px;padding:8px 12px;display:flex;gap:10px;align-items:center;margin-bottom:10px}
+  select,input[type=range]{background:#1B1D22;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:4px}
+  .hint{font-size:12px;color:var(--dim);margin-top:8px}
+  .ev-title{font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Digital twin <span class="badge" id="mode">…</span> <span class="badge" id="aistatus"></span></div>
+  <div class="clock"><span class="t num" id="time">--:--</span><span class="d" id="date"></span></div>
+  <div><span class="lbl">Speed</span><span class="seg" id="speeds"></span></div>
+  <div><span class="lbl">Jump to</span><span class="seg" id="jumps"></span></div>
+</header>
+<main>
+  <section>
+    <div id="manualBanner" class="banner" style="display:none">
+      <span style="flex:1">You are moving the person. The routine is paused.</span>
+      <button class="btn" onclick="send({action:'routine'})">Back to routine</button>
+    </div>
+    <div class="card" style="padding:10px">
+      <svg id="plan" viewBox="0 0 1000 640" role="img" aria-label="Floor plan with the person, devices and sensors"></svg>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h3>Today</h3>
+      <svg id="timeline" viewBox="0 0 1000 200" role="img" aria-label="Timeline of today"></svg>
+      <div class="hint">Faint bar: the planned routine · solid: where the person really was and when each device was on · ◆ AI actions · click a room on the plan to move the person, click a device to press its wall button.</div>
+    </div>
+  </section>
+  <aside>
+    <div class="tabs" id="tabs"></div>
+    <div id="panel"></div>
+  </aside>
+</main>
+<script>
+const ROOM_BOX = {   // the proposed studio layout (rooms not listed here are placed in a row below)
+  living:   {x:30,  y:30,  w:530, h:300},
+  bedroom:  {x:560, y:30,  w:410, h:300},
+  kitchen:  {x:30,  y:330, w:300, h:240},
+  entrance: {x:330, y:330, w:230, h:240},
+  bathroom: {x:760, y:330, w:210, h:240},
+};
+const HALL = {x:560, y:330, w:200, h:240};
+const DOORS = {     // [roomA, roomB] -> point on the wall between them
+  "living|kitchen":[180,330], "living|entrance":[445,330], "living|bedroom":[560,180],
+  "entrance|hall":[560,450], "hall|bathroom":[760,450], "entrance|out":[445,590],
+};
+const ROOM_COLOR = {living:"#8FB8FF", kitchen:"#F5A524", bedroom:"#C792EA", bathroom:"#2BB3A3", entrance:"#9BA1AA", out:"#3A3F47"};
+const SPEEDS = [1, 10, 60, 300, 600];
+const JUMPS = ["06:00", "08:00", "16:30", "19:00", "23:00"];
+let S = null, tab = "ai", lastPoll = 0, anim = null, avatar = {x: 445, y: 610};
+
+const $ = (id) => document.getElementById(id);
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pad = (n) => String(n).padStart(2, "0");
+const hm = (ts) => { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const mmss = (s) => s <= 0 ? "0:00" : s >= 600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 60)}:${pad(Math.floor(s % 60))}`;
+const pct = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+async function send(cmd) { await fetch("/cmd", {method:"POST", body: JSON.stringify(cmd)}); poll(); }
+
+function boxes() {
+  const out = {...ROOM_BOX}; let extra = 0;
+  for (const [rid, r] of Object.entries(S.rooms)) {
+    if (!out[rid]) { out[rid] = {x: 30 + extra * 240, y: 600, w: 230, h: 150}; extra++; }
+  }
+  return out;
+}
+function center(b) { return [b.x + b.w * 0.36, b.y + b.h * 0.55]; }
+function graph() {
+  const g = {};
+  const add = (a, b) => { (g[a] ||= []).push(b); (g[b] ||= []).push(a); };
+  for (const k of Object.keys(DOORS)) { const [a, b] = k.split("|"); add(a, b); }
+  return g;
+}
+function routeRooms(from, to) {
+  const g = graph(), prev = {[from]: null}, q = [from];
+  while (q.length) { const n = q.shift(); if (n === to) break; for (const m of g[n] || []) if (!(m in prev)) { prev[m] = n; q.push(m); } }
+  if (!(to in prev)) return [from, to];
+  const path = []; for (let n = to; n != null; n = prev[n]) path.unshift(n); return path;
+}
+function pointOf(room, B) { if (room === "out" || !room) return [445, 615]; if (room === "hall") return [HALL.x + HALL.w / 2, HALL.y + HALL.h / 2]; return center(B[room] || ROOM_BOX.living); }
+function waypoints(from, to, B) {
+  const rooms = routeRooms(from || "out", to || "out"), pts = [pointOf(rooms[0], B)];
+  for (let i = 1; i < rooms.length; i++) {
+    const d = DOORS[`${rooms[i - 1]}|${rooms[i]}`] || DOORS[`${rooms[i]}|${rooms[i - 1]}`];
+    if (d) pts.push(d);
+    pts.push(pointOf(rooms[i], B));
+  }
+  return pts;
+}
+
+// ------------------------------------------------------------------ header
+function header() {
+  $("mode").textContent = {"twin-only": "No Firebase · in memory", cloud: "Real Firebase", emulator: "Local emulator"}[S.mode] || S.mode;
+  const ai = S.ai;
+  $("aistatus").textContent = ai ? `AI ${ai.status}${ai.data_source === "simulated" ? " · simulated data" : ""}` : "AI off";
+  $("aistatus").style.color = ai ? (ai.status === "ready" ? "var(--good)" : "var(--warn)") : "var(--muted)";
+  const sp = $("speeds");
+  sp.innerHTML = `<button class="${S.paused ? "on" : ""}" onclick="send({action:'${S.paused ? "resume" : "pause"}'})">${S.paused ? "Play" : "Pause"}</button>` +
+    SPEEDS.map((v) => `<button class="${!S.paused && Math.round(S.speed) === v ? "on" : ""}" onclick="send({action:'speed',value:${v}})">${v}×</button>`).join("");
+  $("jumps").innerHTML = JUMPS.map((t) => `<button onclick="send({action:'jump',time:'${t}'})">${t}</button>`).join("");
+  $("manualBanner").style.display = S.person.manual ? "flex" : "none";
+}
+function tickClock() {
+  if (!S) return;
+  const now = S.now + (S.paused ? 0 : (performance.now() - lastPoll) / 1000 * S.speed);
+  const d = new Date(now * 1000);
+  $("time").textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  $("date").textContent = d.toLocaleDateString("en-GB", {weekday: "long", day: "numeric", month: "short"}) + (S.speed > 1 && !S.paused ? `  ·  ${Math.round(S.speed)}× faster` : "");
+}
+
+// ------------------------------------------------------------------ floor plan
+function iconSvg(d, x, y) {
+  const on = d.v === 1, c = d.icon === "fan" ? "var(--fan)" : d.icon === "light" ? "var(--light)" : d.icon === "tv" ? "var(--accent)" : "#B9BEC6";
+  if (d.icon === "fan") {
+    const spd = on ? `${(1.6 - (d.level || 70) / 100).toFixed(2)}s` : "0s";
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#123330" : "#1F2227"}"/>
+      <g class="${on ? "spin" : ""}" style="--spd:${spd}">${[0, 120, 240].map((a) => `<ellipse rx="4.5" ry="10" cy="-8" fill="${on ? c : "#555B63"}" transform="rotate(${a})"/>`).join("")}</g>
+      <circle r="3" fill="#0E0F12"/></g>`;
+  }
+  if (d.icon === "light") {
+    return `<g transform="translate(${x},${y})">${on ? `<circle r="30" fill="${c}" opacity=".18"/>` : ""}<circle r="17" fill="${on ? "#3A2A0C" : "#1F2227"}"/>
+      <path d="M-5 5h10M-4 9h8M0 -11a8 8 0 0 1 5 14h-10a8 8 0 0 1 5-14z" stroke="${on ? c : "#555B63"}" stroke-width="2" fill="none"/></g>`;
+  }
+  if (d.icon === "tv") {
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#17233A" : "#1F2227"}"/><rect x="-10" y="-7" width="20" height="13" rx="2" fill="${on ? c : "none"}" stroke="${on ? c : "#555B63"}" stroke-width="2"/></g>`;
+  }
+  if (d.icon === "lock") {
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#13261B" : "#1F2227"}"/><rect x="-7" y="-2" width="14" height="10" rx="2" fill="none" stroke="${on ? "var(--good)" : "#9BA1AA"}" stroke-width="2"/><path d="M-4 -2v-4a4 4 0 0 1 8 0${on ? "" : "v4"}" fill="none" stroke="${on ? "var(--good)" : "#9BA1AA"}" stroke-width="2"/></g>`;
+  }
+  return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#1E2A3F" : "#1F2227"}"/><circle r="6" fill="${on ? c : "#555B63"}"/></g>`;
+}
+function drawPlan() {
+  const B = boxes(), ai = S.ai || {}, now = S.now, out = [];
+  const maxY = Math.max(...Object.values(B).map((b) => b.y + b.h)) + 60;
+  $("plan").setAttribute("viewBox", `0 0 1000 ${maxY}`);
+  out.push(`<rect x="${HALL.x}" y="${HALL.y}" width="${HALL.w}" height="${HALL.h}" fill="#121317" stroke="#1E2126" stroke-width="2"/><text x="${HALL.x + 14}" y="${HALL.y + 26}" class="room-sub">Hall</text>`);
+  for (const [rid, b] of Object.entries(B)) {
+    const r = S.rooms[rid]; if (!r) continue;
+    const occ = r.occ === 1 || S.person.room === rid;
+    out.push(`<g class="clickable" onclick="send({action:'move',room:'${rid}'})">
+      <rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="14" fill="${occ ? "#1B1F27" : "#16181C"}" stroke="${r.offline ? "#4A2020" : occ ? "#3B4A66" : "#24272C"}" stroke-width="2" ${r.offline ? 'stroke-dasharray="8 6"' : ""}/>
+      <text x="${b.x + 16}" y="${b.y + 28}" class="room-name">${esc(r.name)}${r.hidden ? " · door" : ""}</text>`);
+    const bits = [];
+    if (r.temp != null) bits.push(`${r.temp}°C`);
+    if (r.lux != null) bits.push(`${r.lux} lx`);
+    if (r.offline) bits.push("node offline");
+    out.push(`<text x="${b.x + 16}" y="${b.y + 48}" class="room-sub num">${bits.join(" · ")}</text>`);
+    // presence sensors: radar arc + PIR dot
+    const hw = (r.hardware || []).join(" ").toLowerCase(); let sx = b.x + b.w - 20;
+    if (hw.includes("pir")) { out.push(`<circle cx="${sx}" cy="${b.y + 22}" r="6" fill="${r.pir ? "var(--warn)" : "#2A2E35"}" class="${r.pir ? "pulse" : ""}"><title>PIR (motion)</title></circle>`); sx -= 22; }
+    if (hw.includes("mmwave")) out.push(`<path d="M${sx - 8} ${b.y + 28} a10 10 0 0 1 16 0 M${sx - 12} ${b.y + 24} a15 15 0 0 1 24 0" stroke="${r.mmwave ? "var(--good)" : "#2A2E35"}" stroke-width="3" fill="none"><title>Radar (presence)</title></path>`);
+    const since = (ai.vacant_rooms || {})[rid];
+    if (since) out.push(`<text x="${b.x + 16}" y="${b.y + 68}" class="room-sub num" fill="var(--warn)" style="fill:var(--warn)">empty ${mmss(now - since)} (radar + PIR)</text>`);
+    out.push(`</g>`);
+    // devices
+    const devs = Object.entries(S.devices).filter(([, d]) => d.room === rid);
+    devs.forEach(([id, d], i) => {
+      const cols = Math.max(1, Math.floor((b.w - 20) / 170)), cx = b.x + 34 + (i % cols) * 170, cy = b.y + b.h - 44 - Math.floor(i / cols) * 62;
+      const pend = (ai.pending || {})[id], guard = (ai.guards || {})[id], off = (ai.smart_off || {})[id], paused = (ai.paused || {})[id];
+      out.push(`<g class="${d.write && d.button ? "clickable" : ""}" ${d.write && d.button ? `onclick="event.stopPropagation();send({action:'press',device:'${id}'})"` : ""}>`);
+      if (pend) out.push(`<circle cx="${cx}" cy="${cy}" r="23" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4 4"/>`);
+      if (guard) out.push(`<circle cx="${cx}" cy="${cy}" r="23" fill="none" stroke="var(--warn)" stroke-width="2.5"/>`);
+      out.push(iconSvg(d, cx, cy));
+      out.push(`<text x="${cx + 26}" y="${cy - 3}" class="devlabel">${esc(d.label.replace(r.name + " ", ""))}</text>`);
+      const w = d.watts ? ` · ${d.watts} W` : "";
+      out.push(`<text x="${cx + 26}" y="${cy + 13}" class="devstate num">${esc(d.state)}${w}${d.fault ? " · ⚠ fault" : ""}</text>`);
+      let tag = null, col = "var(--accent)";
+      if (guard) { tag = `waiting for you ${mmss(guard.deadline - now)}`; col = "var(--warn)"; }
+      else if (pend) tag = now < pend.start ? `AI at ${hm(pend.start)} · ${pct(pend.p)}` : `AI ready · ${pend.reason || "checking sensors"}`;
+      else if (off && !off.paused) { tag = `AI off in ${mmss(off.off_at - now)}`; col = "var(--warn)"; }
+      else if (paused) { tag = paused === "override" ? "AI hands off (manual)" : "AI paused"; col = "var(--muted)"; }
+      if (tag) out.push(`<text x="${cx + 26}" y="${cy + 29}" class="ai-tag num" fill="${col}" style="fill:${col}">${esc(tag)}</text>`);
+      out.push(`</g>`);
+    });
+  }
+  // front door + outside
+  out.push(`<rect x="415" y="566" width="60" height="8" rx="3" fill="#3A3F47"/><text x="485" y="${Math.max(600, 0)}" class="room-sub">front door</text>`);
+  // person
+  const p = S.person, sleeping = p.activity === "Sleeping";
+  out.push(`<g id="avatar" transform="translate(${avatar.x},${avatar.y})">
+    <circle r="16" fill="var(--person)" opacity=".18"/><circle r="10" fill="var(--person)"/>
+    <circle cy="-15" r="6.5" fill="var(--person)"/>
+    ${sleeping ? `<text x="14" y="-18" style="fill:var(--person);font-weight:700">z z</text>` : ""}
+    <g transform="translate(18,6)"><rect x="0" y="-13" rx="8" height="22" width="${Math.max(70, p.activity.length * 7.4 + 16)}" fill="#24202C" stroke="#4A3D5C"/>
+    <text x="8" y="2" style="fill:#E7D7F7;font-size:12.5px;font-weight:600">${esc(p.activity)}${p.still >= 0.8 && !sleeping ? " · still" : ""}</text></g></g>`);
+  $("plan").innerHTML = out.join("");
+  animatePerson(B);
+}
+function animatePerson(B) {
+  const target = pointOf(S.person.room, B);
+  const key = S.person.room;
+  if (!anim) { [avatar.x, avatar.y] = target; anim = {key, pts: [target], t0: 0, dur: 1}; return; }
+  if (anim.key !== key) {
+    const pts = waypoints(anim.key, key, B);
+    pts[0] = [avatar.x, avatar.y];
+    anim = {key, pts, t0: performance.now(), dur: Math.min(2400, 500 * pts.length)};
+  }
+}
+function stepAvatar() {
+  if (anim) {
+    const k = Math.min(1, (performance.now() - anim.t0) / anim.dur), n = anim.pts.length - 1;
+    if (n <= 0) { [avatar.x, avatar.y] = anim.pts[0]; }
+    else { const f = k * n, i = Math.min(n - 1, Math.floor(f)), u = f - i, a = anim.pts[i], b = anim.pts[i + 1];
+      avatar.x = a[0] + (b[0] - a[0]) * u; avatar.y = a[1] + (b[1] - a[1]) * u; }
+    const g = document.getElementById("avatar"); if (g) g.setAttribute("transform", `translate(${avatar.x},${avatar.y})`);
+  }
+  tickClock();
+  requestAnimationFrame(stepAvatar);
+}
+
+// ------------------------------------------------------------------ timeline
+function drawTimeline() {
+  const W = 1000, L = 130, R = 20, X = (h) => L + (W - L - R) * h / 24, out = [];
+  const devs = Object.entries(S.devices).filter(([, d]) => d.write || d.icon === "tv");
+  const H = 50 + 22 * (devs.length + 1);
+  $("timeline").setAttribute("viewBox", `0 0 ${W} ${H}`);
+  for (let h = 0; h <= 24; h += 3) out.push(`<line x1="${X(h)}" x2="${X(h)}" y1="18" y2="${H - 4}" stroke="#1F2227"/><text x="${X(h)}" y="12" text-anchor="middle" class="room-sub" style="font-size:11px">${pad(h)}:00</text>`);
+  // planned routine (faint)
+  out.push(`<text x="0" y="40" class="devlabel">Person</text>`);
+  for (const [a, b, room] of S.routine) out.push(`<rect x="${X(a)}" y="28" width="${Math.max(1, X(b) - X(a))}" height="16" fill="${ROOM_COLOR[room] || "#777"}" opacity=".22"/>`);
+  // actual (from changes)
+  const day0 = S.day0, nowH = (S.now - day0) / 3600;
+  const roomCh = S.changes.filter((c) => c[1] === "room").map((c) => [Math.max(0, (c[0] - day0) / 3600), c[3]]);
+  roomCh.forEach(([h, room], i) => { const e = i + 1 < roomCh.length ? roomCh[i + 1][0] : nowH; if (e > 0) out.push(`<rect x="${X(h)}" y="31" width="${Math.max(1, X(e) - X(h))}" height="10" rx="2" fill="${ROOM_COLOR[room] || "#777"}"/>`); });
+  devs.forEach(([id, d], k) => {
+    const y = 56 + k * 22;
+    out.push(`<text x="0" y="${y + 11}" class="devlabel" style="font-size:12px">${esc(d.label)}</text>`);
+    const ch = S.changes.filter((c) => c[1] === "dev" && c[2] === id).map((c) => [(c[0] - day0) / 3600, c[3]]);
+    let state = ch.length ? 1 - ch[0][1] : d.v, from = 0;
+    const col = d.icon === "fan" ? "var(--fan)" : d.icon === "light" ? "var(--light)" : "var(--accent)";
+    for (const [h, v] of ch) { if (state && h > from) out.push(`<rect x="${X(Math.max(0, from))}" y="${y}" width="${Math.max(1, X(h) - X(Math.max(0, from)))}" height="12" rx="3" fill="${col}"/>`); state = v; from = h; }
+    if (state) out.push(`<rect x="${X(Math.max(0, from))}" y="${y}" width="${Math.max(1, X(nowH) - X(Math.max(0, from)))}" height="12" rx="3" fill="${col}"/>`);
+  });
+  // AI marks
+  for (const e of S.events) {
+    if (e.group !== "ai" || !e.device) continue;
+    const k = devs.findIndex(([id]) => id === e.device); if (k < 0) continue;
+    const h = (e.at / 1000 - day0) / 3600; if (h < 0) continue;
+    out.push(`<path d="M${X(h)} ${56 + k * 22 - 4} l4 4 l-4 4 l-4 -4z" fill="#fff"><title>${esc(e.title)} — ${esc(e.short || "")}</title></path>`);
+  }
+  out.push(`<line x1="${X(nowH)}" x2="${X(nowH)}" y1="20" y2="${H - 4}" stroke="var(--bad)" stroke-width="2"/>`);
+  $("timeline").innerHTML = out.join("");
+}
+
+// ------------------------------------------------------------------ side panel
+const TABS = [["ai", "AI"], ["control", "Control"], ["scen", "Scenarios"], ["events", "Events"]];
+function drawTabs() { $("tabs").innerHTML = TABS.map(([k, t]) => `<button class="${tab === k ? "on" : ""}" onclick="tab='${k}';render()">${t}</button>`).join(""); }
+const ACTION = {schedule_on: ["Will switch on", "var(--accent)"], keep_on: ["Keeps on", "var(--good)"], suggest_on: ["Asks: on?", "var(--warn)"],
+  suggest_off: ["Asks: off?", "var(--warn)"], paused_by_override: ["Hands off", "var(--muted)"], paused_by_user: ["Paused", "var(--muted)"],
+  learning: ["Learning", "var(--muted)"], none: ["Nothing", "var(--dim)"]};
+function panelAI() {
+  const ai = S.ai; if (!ai) return `<div class="card muted">The AI is not running. Install it with <code>pip install -r ai/requirements.txt</code>.</div>`;
+  const label = (id) => (S.devices[id] || {}).label || id, now = S.now, o = [];
+  o.push(`<div class="card"><h3>Next hour — what the model thinks</h3>`);
+  for (const d of ai.plan) {
+    const [t, c] = ACTION[d.action] || [d.action, "var(--muted)"];
+    o.push(`<div class="row"><div style="flex:1;min-width:0"><div><b>${esc(label(d.device))}</b> <span class="chip" style="color:${c}">${t}</span></div>
+      <div class="muted small">${esc(d.why || "")}</div></div><div class="bar"><span style="width:${pct(d.p_on)}"></span></div><span class="num small" style="width:36px;text-align:right">${pct(d.p_on)}</span></div>`);
+  }
+  if (!ai.plan.length) o.push(`<div class="muted small">Planning runs every 15 minutes (house time).</div>`);
+  o.push(`</div>`);
+  const pend = Object.entries(ai.pending), guards = Object.entries(ai.guards), sug = Object.entries(ai.suggestions);
+  o.push(`<div class="card" style="margin-top:12px"><h3>Waiting for the sensors</h3>`);
+  for (const [id, p] of pend) o.push(`<div class="row"><div style="flex:1"><b>${esc(label(id))}</b><div class="muted small">${now < p.start ? `from ${hm(p.start)}` : "now"} until ${hm(p.deadline)} · ${pct(p.p)} · ${esc(p.reason || "waiting")}</div></div></div>`);
+  for (const [id, g] of guards) o.push(`<div class="row"><div style="flex:1"><b>${esc(label(id))}</b> <span class="chip" style="color:var(--warn)">waste guard</span><div class="muted small num">switched on at ${hm(g.on_at)} · off by itself in ${mmss(g.deadline - now)} if nobody comes</div></div></div>`);
+  for (const [, s] of sug) o.push(`<div class="row"><div style="flex:1"><b>${esc(s.title)}</b> <span class="chip" style="color:var(--warn)">question</span><div class="muted small num">${pct(s.conf)} · withdrawn in ${mmss(s.expires - now)}</div></div></div>`);
+  if (!pend.length && !guards.length && !sug.length) o.push(`<div class="muted small">Nothing waiting right now.</div>`);
+  o.push(`</div>`);
+  const e = ai.energy || {}, st = ai.stats || {};
+  o.push(`<div class="card" style="margin-top:12px"><h3>Energy and the AI today</h3><div class="metrics">
+    <div><b class="num" style="color:var(--good)">${(e.saved_by_ai_wh ?? 0).toFixed(1)}</b><span>Wh saved (est.)</span></div>
+    <div><b class="num">${(e.wasted_by_ai_wh ?? 0).toFixed(1)}</b><span>Wh used by misses</span></div>
+    <div><b class="num">${(e.wasted_wh ?? 0).toFixed(1)}</b><span>Wh wasted in total</span></div></div>
+    <div class="muted small" style="margin-top:10px">Since start: switched on ${st.ai_on || 0} · came ${st.ai_hit || 0} · missed ${st.ai_miss || 0} · skipped by sensors ${st.skipped || 0} · smart off ${st.smart_off || 0} · asked ${st.suggested || 0} (yes ${st.accepted || 0}, expired ${st.expired || 0})</div></div>`);
+  if ((ai.anomalies || []).length) o.push(`<div class="card" style="margin-top:12px"><h3>Power faults</h3>${ai.anomalies.slice().reverse().map((a) => `<div class="row"><div><b style="color:var(--warn)">${esc(a.title)}</b><div class="muted small">${esc(a.text)}</div></div></div>`).join("")}</div>`);
+  return o.join("");
+}
+function panelControl() {
+  const p = S.person, o = [];
+  o.push(`<div class="card"><h3>The person</h3><div class="small">${p.manual ? "<b style='color:var(--warn)'>You are in control</b>" : "Following the routine"} · now: <b>${esc(p.activity)}</b> in <b>${esc((S.rooms[p.room] || {}).name || p.room)}</b></div>
+    <div class="grid2" style="margin-top:10px">${Object.entries(S.rooms).map(([rid, r]) => `<button class="btn" onclick="send({action:'move',room:'${rid}'})">${esc(r.name)}</button>`).join("")}
+    <button class="btn" onclick="send({action:'move',room:'out'})">Leave home</button><button class="btn pri" onclick="send({action:'routine'})">Back to routine</button></div>
+    <div style="margin-top:10px" class="small">Movement: <span class="seg">
+      <button class="${p.force_still == null ? "on" : ""}" onclick="send({action:'still',on:null})">Routine</button>
+      <button class="${p.force_still === true ? "on" : ""}" onclick="send({action:'still',on:true})">Sitting still</button>
+      <button class="${p.force_still === false ? "on" : ""}" onclick="send({action:'still',on:false})">Moving</button></span></div>
+    <div class="hint">Sitting still: the PIR sees nothing but the radar still sees him — the AI must not switch anything off.</div></div>`);
+  o.push(`<div class="card" style="margin-top:12px"><h3>Weather</h3><div class="small">Outside temperature <b class="num">${S.temp_delta >= 0 ? "+" : ""}${S.temp_delta}°C</b> vs normal</div>
+    <input type="range" min="-6" max="8" step="1" value="${S.temp_delta}" style="width:100%" onchange="send({action:'temp',delta:+this.value})"></div>`);
+  o.push(`<div class="card" style="margin-top:12px"><h3>Faults</h3>${Object.entries(S.devices).filter(([, d]) => d.watts != null && d.icon !== "lock").map(([id, d]) => `
+    <div class="row"><span style="flex:1">${esc(d.label)}</span><select onchange="send({action:'fault',device:'${id}',kind:this.value||null})">
+      ${[["", "Normal"], ["high", "Motor blocked (2× power)"], ["dead", "Burnt (no power)"], ["standby", "Stuck relay (power when off)"]].map(([v, t]) => `<option value="${v}" ${(d.fault || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>`).join("")}
+    <div class="row"><span style="flex:1">Wrong PIN at the door</span><button class="btn" onclick="send({action:'wrong_pin'})">Try</button></div>
+    ${[...new Set(Object.values(S.rooms).map((r) => r.node))].filter(Boolean).map((n) => {
+      const off = Object.values(S.rooms).some((r) => r.node === n && r.offline);
+      return `<div class="row"><span style="flex:1">${esc(n)} node</span><button class="btn" onclick="send({action:'node',node:'${n}',offline:${!off}})">${off ? "Bring online" : "Take offline"}</button></div>`; }).join("")}</div>`);
+  return o.join("");
+}
+function panelScen() {
+  const sc = S.scenarios; if (!sc) return `<div class="card muted">Scenarios are not available.</div>`;
+  const o = [];
+  if (sc.running) o.push(`<div class="card" style="border-color:#3B4A66"><h3>Running</h3><b>${esc(sc.running.title)}</b><div class="muted small num">${esc(sc.running.step)} · ${sc.running.elapsed_min} min (house time)</div><button class="btn" style="margin-top:8px" onclick="send({action:'scenario_stop'})">Stop</button></div>`);
+  o.push(`<div class="card" style="margin-top:12px"><h3>Test the AI</h3>${sc.catalog.map((c) => `<div class="row"><div style="flex:1"><b>${esc(c.title)}</b><div class="muted small">${esc(c.desc)}</div></div><button class="btn" ${sc.running ? "disabled" : ""} onclick="send({action:'scenario',id:'${c.id}'})">Run</button></div>`).join("")}</div>`);
+  if (sc.results.length) o.push(`<div class="card" style="margin-top:12px"><h3>Results</h3>${sc.results.slice().reverse().map((r) => `<div class="row"><div style="flex:1"><b>${esc(r.title)}</b> <span class="chip ${r.ok ? "pass" : "fail"}">${r.ok ? "PASS" : "FAIL"}</span><div class="muted small">${esc(r.detail)}</div></div><span class="muted small num">${r.at}</span></div>`).join("")}<div class="hint">Also saved in pi/twin/reports/ for the report.</div></div>`);
+  return o.join("");
+}
+function panelEvents() {
+  const col = {ai: "var(--accent)", rule: "var(--fan)", manual: "var(--text)", door: "var(--person)", system: "var(--muted)", alert: "var(--warn)"};
+  return `<div class="card"><h3>Live events</h3>${S.events.map((e) => `<div class="row"><span class="num muted small" style="width:42px;flex:none">${hm(e.at / 1000)}</span><div style="flex:1;min-width:0"><div class="ev-title" style="color:${col[e.group] || "var(--text)"}">${esc(e.title)}</div><div class="muted small">${esc(e.src)}${e.short ? " · " + esc(e.short) : ""}</div></div></div>`).join("") || `<div class="muted small">Nothing yet.</div>`}</div>`;
+}
+function render() {
+  if (!S) return;
+  header(); drawPlan(); drawTimeline(); drawTabs();
+  const focused = document.activeElement && ["SELECT", "INPUT"].includes(document.activeElement.tagName);
+  if (!focused) $("panel").innerHTML = {ai: panelAI, control: panelControl, scen: panelScen, events: panelEvents}[tab]();
+}
+async function poll() {
+  try { const r = await fetch("/state", {cache: "no-store"}); S = await r.json(); lastPoll = performance.now(); render(); }
+  catch (e) { $("mode").textContent = "simulator stopped"; }
+}
+setInterval(poll, 500); poll(); requestAnimationFrame(stepAvatar);
+</script>
+</body>
+</html>

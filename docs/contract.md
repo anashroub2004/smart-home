@@ -76,7 +76,7 @@
 | `control.app/button/rules/ai` | `true/false` | من يُسمح له بالتغيير. جهاز مراقبة = كلها `false` |
 | `control.confirm` | `true` | يطلب تأكيداً قبل التنفيذ |
 | `rules.off_when_empty` | | يُطفأ بعد فراغ الغرفة `empty_room_off_min` دقيقة |
-| `rules.on_when_dark` | | يعمل عند الظلام ووجود شخص (`light_on_lux`) |
+| `rules.on_when_dark` | | يعمل عند الظلام **لحظة دخول شخص** للغرفة (خلال 90 ث من بدء الوجود، `light_on_lux`) — لا يعيد تشغيل ضوء أطفأه شخص نائم أو جالس |
 | `rules.follow_temp` | | يعمل فوق `fan_on_temp` ويُطفأ تحت `fan_off_temp` |
 | `rules.alert_if_off_min` | رقم | للمراقبة: تنبيه إذا توقف أكثر من N دقيقة (ثلاجة) |
 | `hw.out` | `relay` · `pwm` · `ir` · `servo` · `none` | كيف تشغّله العقدة |

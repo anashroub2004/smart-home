@@ -135,6 +135,7 @@ firebase_writer.py, database.rules.json) أخبرني به ولا تنفّذه.
 3. `commands.py`: `/commands` ← MQTT `.../set` مع done/failed و timeout.
 4. `automation.py`: القواعد لكل جهاز حسب `rules` + الـ AI: `plan()` كل 15 دقيقة، `tick()` كل 5 ثوانٍ وتنفيذ ما يرجعه
    عبر `ai.dispatch.MqttExecutor`، و`on_manual()` عند أي تحكم يدوي، و`on_answer()` عند رد المستخدم — نفس ما يفعله `sim_house.py`.
+   القواعد كما في المحاكي: `on_when_dark` فقط خلال 90 ث من دخول شخص، و`off_when_empty` تتخطى الجهاز ما دام `ai.guarding(dev)`.
 5. `security.py` و `camera.py`، ثم `fake_nodes.py`، ثم ملفات systemd، ثم خدمة تنظيف السجل (30 يوماً في Firebase).
 
 **رسالة البداية:**

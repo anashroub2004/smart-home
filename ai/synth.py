@@ -9,8 +9,8 @@ and optionally a routine change at the end (to test drift detection).
 import numpy as np
 import pandas as pd
 
+from . import routine, store
 from . import settings as S
-from . import store
 from .spec import device_kind
 
 
@@ -18,7 +18,6 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
     """Returns a list of (ts, key, value) every 5 minutes, ending at end_ts (default: now)."""
     rng = np.random.default_rng(seed)
     rooms = config["rooms"]
-    visible = [r for r, rc in rooms.items() if not rc.get("hidden")]
     devs = {d: (rid, c) for rid, r in rooms.items() for d, c in (r.get("devices") or {}).items()
             if not (c.get("caps") or {}).get("lock")}
     end = pd.Timestamp(end_ts or pd.Timestamp.now().timestamp(), unit="s", tz="UTC").tz_convert(S.TZ)
@@ -34,23 +33,16 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
     state = {dv: 0 for dv in devs}
     level = {dv: None for dv in devs}
     rows = []
-    where = "bedroom" if "bedroom" in rooms else visible[0]
     day_plan = {}
 
+    changed_from = (end - pd.Timedelta(days=routine_change_days)).date() if routine_change_days else None
+    room_ids = tuple(rooms)
+
     def plan(day):
-        j = lambda s: rng.normal(0, s)
-        weekend = day.weekday() in S.WEEKEND_DAYS
-        changed = routine_change_days and day >= (end - pd.Timedelta(days=routine_change_days)).normalize()
-        if changed:                       # e.g. summer holiday: late mornings, out in the evening
-            wake, sleep, out = 10 + j(.5), 1.0 + 24 + j(.5), [(17 + j(.5), 21 + j(.5))]
-        elif not weekend:
-            wake, sleep, out = 7 + j(.3), 23 + j(.5), [(8 + j(.3), 16.5 + j(.7))]
-        else:
-            wake, sleep = 9.5 + j(1), 23.8 + j(.6)
-            out = [(12 + j(1), 17 + j(1))] if rng.random() < .5 else []
-        if rng.random() < .07:
-            out = []
-        return dict(wake=wake, sleep=sleep, out=out, tmax=29.5 + j(2), sunset=18.3 + j(.15))
+        """Where the person is comes from ai/routine.py (the same routine the live simulator uses)."""
+        d = day.date()
+        p = routine.day_plan(d, seed, bool(changed_from and d >= changed_from))
+        return dict(segs=routine.segments(d, seed, changed_from, room_ids), tmax=p["tmax"], sunset=p["sunset"])
 
     t = start
     prev_home = True
@@ -62,15 +54,12 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
         h = t.hour + t.minute / 60
         ts = int(t.timestamp())
         away = bool(trip and trip[0] <= t < trip[1])
-        home = not away and not any(a <= h < b for a, b in p["out"])
-        asleep = h < p["wake"] or h >= p["sleep"]
-        if not home:
-            where = "out"
-        elif asleep:
-            where = "bedroom" if "bedroom" in rooms else visible[0]
-        elif int(t.minute) % 15 == 0:
-            weights = np.array([6 if r == "living" else 1 for r in visible], float)
-            where = rng.choice(visible, p=weights / weights.sum())
+        seg = routine.at(p["segs"], h)
+        where = routine.OUT if away else seg[2]
+        home = where != routine.OUT
+        asleep = home and seg[3] == "Sleeping"
+        still = seg[4]
+        tv_time = home and "TV" in seg[3]
         if home and not prev_home:
             rows.append((ts, "door/entry", 1))
         prev_home = home
@@ -95,7 +84,7 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
                 if "mmwave" in hw:
                     rows.append((ts, f"{rid}/mmwave", occ))
                 if "pir" in hw:   # PIR misses people who sit or sleep still
-                    rows.append((ts, f"{rid}/pir", int(occ and rng.random() < (.25 if asleep else .7))))
+                    rows.append((ts, f"{rid}/pir", int(occ and rng.random() > still)))
         for dv, (rid, c) in devs.items():
             occ, kind = int(where == rid), device_kind(c)
             caps = c.get("caps") or {}
@@ -103,7 +92,7 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
             room_lux = lux_sun * 0.75
             st = state[dv]
             if caps.get("power") == "read":            # monitor-only: TV evenings, fridge always
-                st = 1 if c.get("icon") == "fridge" else int(occ and 18 <= h < 23.5 and rng.random() < .9)
+                st = 1 if c.get("icon") == "fridge" else int(occ and tv_time)
             elif kind == "thermal":
                 if occ and (temp > 28.3 or (asleep and temp > 27)) and rng.random() < .8:
                     st = 1

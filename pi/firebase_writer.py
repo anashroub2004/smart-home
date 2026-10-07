@@ -5,13 +5,20 @@ so the web app cannot tell them apart. Paths and shapes follow docs/contract.md.
 import time
 from datetime import datetime
 
+_clock = time.time      # the simulator's digital twin swaps in a virtual clock (set_clock); the Pi never does
+
+
+def set_clock(fn):
+    global _clock
+    _clock = fn
+
 
 def now_ms():
-    return int(time.time() * 1000)
+    return int(_clock() * 1000)
 
 
 def day_key(ts=None):
-    return datetime.fromtimestamp(ts or time.time()).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts or _clock()).strftime("%Y-%m-%d")
 
 
 class Writer:
