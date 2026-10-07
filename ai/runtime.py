@@ -349,6 +349,14 @@ class AIRuntime:
                 self.vacant_since.setdefault(rid, now)
             else:
                 self.vacant_since.pop(rid, None)
+        # hands-off after manual control lasts 2 h OR until you leave that room (confirmed vacancy after the
+        # manual action): switching the light off on your way out is not "leave this device alone" for the
+        # next time you walk in. A device switched from the app while the room was already empty stays paused.
+        for dev, at in list(self.override_at.items()):
+            spec = self.specs.get(dev)
+            since = self.vacant_since.get(spec.room) if spec else None
+            if since is not None and since >= at:
+                self.override_at.pop(dev)
 
         # 1. scheduled switch-ons waiting for the sensor gate
         for dev in list(self.pending):
@@ -507,6 +515,15 @@ class AIRuntime:
         """True while an AI switch-on is waiting for someone to come (pre-cooling): the 'empty room' rule
         must wait too, otherwise it switches the pre-cooling off at once and the guard bounds the waste anyway."""
         return dev in self.guards
+
+    def counting_off(self, dev):
+        """True while the AI's smart-off timer runs for this device (its room is confirmed empty by radar + PIR
+        and the AI is not paused for it). The 'empty room' rule waits: the AI decides when (5-20 min) and it
+        logs why. Rooms without a radar are never 'confirmed empty', so there the rule still does the job."""
+        spec = self.specs.get(dev)
+        if spec is None or dev in self.guards or spec.room not in self.vacant_since:
+            return False
+        return not self.paused(dev, {"rooms": self.house_rooms or {}}, self.clock())
 
     def waste_cause(self, dev, devices, house, now):
         st = devices.get(dev) or {}

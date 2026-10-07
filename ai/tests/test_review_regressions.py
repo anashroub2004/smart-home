@@ -58,6 +58,40 @@ class Regressions(unittest.TestCase):
         self.assertTrue(on, "the fan never switched on")
         self.assertEqual(on[0], 45)                  # target 60 min - lead 15 min, from the FIRST plan
 
+    def test_hands_off_ends_when_you_leave_the_room(self):
+        """Twin 2026-10-07: light switched off by hand on the way to the kitchen -> back at 19:30 in the dark,
+        the AI stayed 'hands off' for 2 h. Leaving the room (confirmed vacancy) now ends the pause."""
+        rt, _, tmp = runtime(self.cfg, self.con, 0.0)
+        self.addCleanup(tmp.cleanup)
+        rt.on_manual("living_light", NOW)
+        h = house({"living": 1})
+        rt.tick(h, NOW + 30, dt=30)
+        self.assertEqual(rt.paused("living_light", h, NOW + 30), "override")      # still in the room: hands off
+        rt.tick(house({"kitchen": 1}), NOW + 60, dt=30)                            # left: radar + PIR empty
+        self.assertIsNone(rt.paused("living_light", h, NOW + 120))
+
+    def test_app_control_of_an_empty_room_stays_paused(self):
+        """Switched from the app while the room was already empty: keep the 2 h pause."""
+        rt, _, tmp = runtime(self.cfg, self.con, 0.0)
+        self.addCleanup(tmp.cleanup)
+        empty = house({})
+        rt.tick(empty, NOW, dt=30)
+        rt.on_manual("bedroom_fan", NOW + 10)
+        rt.tick(empty, NOW + 60, dt=30)
+        self.assertEqual(rt.paused("bedroom_fan", empty, NOW + 60), "override")
+
+    def test_empty_room_rule_waits_for_the_ai_timer(self):
+        """Twin 2026-10-07: AI smart-off x2 (10 min) tied with the 10-min rule and the rule always won."""
+        rt, _, tmp = runtime(self.cfg, self.con, 0.0)
+        self.addCleanup(tmp.cleanup)
+        on = {"living_light": {"v": 1, "src": "rule", "watts": 1.2}}
+        rt.tick(house({"living": 1}, devices=on), NOW, dt=30)
+        self.assertFalse(rt.counting_off("living_light"))
+        rt.tick(house({"kitchen": 1}, devices=on), NOW + 60, dt=30)
+        self.assertTrue(rt.counting_off("living_light"))
+        rt.on_manual("living_light", NOW + 90)                     # app control while empty: AI hands off
+        self.assertFalse(rt.counting_off("living_light"))
+
     def test_room_without_radar_is_never_vacant(self):
         """Bug 2: no presence sensors (or PIR only) must not count as an empty room."""
         self.assertFalse(gate.room_vacant({"occ": 0}, []))

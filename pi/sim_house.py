@@ -57,6 +57,7 @@ SEED = ROOT / "docs" / "seed.json"
 AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
 TICK_S = 0.25
+DARK_PATIENCE_S = 180            # the person switches the light on himself after 3 min in the dark
 BASE_W = 6.8            # Raspberry Pi + 3 ESP32 nodes + sensors
 
 
@@ -153,6 +154,7 @@ class House:
         self.offline = set(args.offline or [])
         self.override_until = {}         # device -> ts; manual control pauses AI/rules
         self.empty_since = {}            # room -> ts
+        self.dark_since = {}             # room -> ts the person has been sitting in the dark
         self.energy_day = day_key()
         self.energy = dict(w.get_energy_day(self.energy_day))
         self.failed_door = 0
@@ -300,8 +302,11 @@ class House:
                 new = int(self.person.room == rid)            # the simulated person is in this room
                 if new and not s.get("occ"):
                     s["motion_at"] = now_ms()
+                    s["entry_pending"] = True                 # "on when dark" looks at every entry once
                 if new != s.get("occ"):
                     s["occ_since"] = now_ms()
+                if s.get("occ") and not new:
+                    self.end_hands_off(rid)                  # you left: the 2 h hands-off ends with your visit
                 s["occ"] = new
                 s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
                 hw = room.get("hardware", [])
@@ -520,6 +525,11 @@ class House:
         """AI + comfort rules leave the device alone after manual control, or while the user paused it."""
         return CLOCK.now() < self.override_until.get(device, 0) or self.user_paused(device)
 
+    def end_hands_off(self, rid):
+        """Manual control pauses the AI and the rules for 2 h, or until you leave that room."""
+        for dev in (self.config["rooms"].get(rid, {}).get("devices") or {}):
+            self.override_until.pop(dev, None)
+
     def user_paused(self, device):
         """Explicit pause switch in the device sheet (/ai_pause/{device} = until ms)."""
         return now_ms() < int(self.ai_pause.get(device) or 0)
@@ -557,7 +567,8 @@ class House:
                 empty_min = th["empty_room_off_min"]
                 empty_for = t - self.empty_since.get(rid, t)
                 rule = dict(source="rule", src_label="Rule", group="rule", by_label="Automation", tags=["rule"])
-                guarded = bool(self.ai and self.ai_safe(self.ai.guarding, dev))   # AI pre-cooling: its guard decides
+                # AI pre-cooling (its waste guard decides) or the AI's smart-off timer is running: the rule waits
+                guarded = bool(self.ai and (self.ai_safe(self.ai.guarding, dev) or self.ai_safe(self.ai.counting_off, dev)))
                 if r.get("off_when_empty") and st["v"] and not self.user_paused(dev) and not guarded \
                         and empty_for > empty_min * 60 / self.speedup:
                     saved = round(float(st.get("watts") or cfg.get("watts", 0)), 2)   # estimate over the next hour
@@ -570,7 +581,7 @@ class House:
                 elif self.paused(dev) or not s.get("occ"):
                     continue
                 elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"] \
-                        and t - s.get("occ_since", 0) / 1000 < 90:
+                        and (s.get("entry_pending") or t - s.get("occ_since", 0) / 1000 < 90):
                     # only when someone has just come in: a person sleeping or who switched it off stays in the dark
                     self.set_device(dev, 1, self.mid_level(dev), short=f"Light below {th['light_on_lux']} lx",
                                     why=f'Rule "On below {th["light_on_lux"]} lx" · light {s.get("lux")} lx · someone in the room', **rule)
@@ -580,6 +591,8 @@ class House:
                 elif r.get("follow_temp") and st["v"] and s.get("temp", 99) < th["fan_off_temp"]:
                     self.set_device(dev, 0, short=f"Below {th['fan_off_temp']}°C",
                                     why=f'Rule "Off below {th["fan_off_temp"]}°C" · room {s.get("temp")}°C', **rule)
+            if s.get("occ"):
+                s["entry_pending"] = False                   # seen once (works at any --speed, not only within 90 s)
         if self.lock_at and t >= self.lock_at and self.lock_id:
             self.lock_at = None
             st = self.devices[self.lock_id]
@@ -762,6 +775,7 @@ class House:
     def person_tick(self):
         """Move the person along today's routine; doors, light switches and the TV follow what he does."""
         moved = self.person.step(CLOCK.now())
+        self.dark_habit()
         if not moved:
             return
         old, new = moved
@@ -800,6 +814,32 @@ class House:
                                 short=f"Wall button in the {self.room_name(rid).lower()}",
                                 why="Switched off before sleeping" if always else "Switched off when leaving the room",
                                 tags=["manual"])
+
+    def dark_habit(self):
+        """Like a real person: awake in a dark room with the light off, he presses the wall switch himself
+        after a few minutes (only if the rules / AI did not). Not if he switched it off himself in this room."""
+        rid, now = self.person.room, CLOCK.now()
+        room = self.config["rooms"].get(rid) or {}
+        s = self.rooms.get(rid) or {}
+        lux = s.get("lux")
+        if not self.person.habits or self.person.activity == "Sleeping" or lux is None or lux >= self.th["light_on_lux"] \
+                or room.get("node") in self.offline:
+            self.dark_since.pop(rid, None)
+            return
+        lights = [d for d in (room.get("devices") or {}) if self.icon(d) == "light" and self.writable(d)
+                  and self.ctrl(d).get("button") and self.node_of(d) not in self.offline]
+        off = [d for d in lights if not self.devices[d]["v"]
+               and not (self.devices[d].get("src") == "button" and now < self.override_until.get(d, 0))]
+        if not off or len(off) < len(lights):                # a light is on, or he wants it dark
+            self.dark_since.pop(rid, None)
+            return
+        since = self.dark_since.setdefault(rid, now)
+        if now - since >= DARK_PATIENCE_S / self.speedup:
+            self.dark_since.pop(rid, None)
+            self.set_device(off[0], 1, self.mid_level(off[0]), source="button", src_label="Button", group="manual",
+                            by_label="Someone at home (button)",
+                            short=f"Wall button in the {self.room_name(rid).lower()}",
+                            why=f"Too dark ({lux} lx) and nothing switched the light on", tags=["manual"])
 
     def press_button(self, dev):
         """Twin control: the person presses a wall button."""
