@@ -24,6 +24,7 @@ Priority: manual > safety > rules > AI.
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import numpy as np
@@ -175,6 +176,58 @@ class AIRuntime:
         self.report["train_seconds"] = round(time.time() - t0, 1)
         self.reload(self.config)
         self.publish_insights(now)
+        return self.report
+
+    def db_path(self):
+        """The SQLite file behind self.con, or None for an in-memory database."""
+        try:
+            for _, name, path in self.con.execute("PRAGMA database_list"):
+                if name == "main":
+                    return path or None
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def start_retrain(self, now=None):
+        """Retrain in a background thread so the house (and the twin page) keeps responding.
+        The thread uses its own SQLite connection; the caller installs the result with finish_retrain().
+        Returns False when that is not possible (in-memory DB) — then call retrain() instead."""
+        path = self.db_path()
+        if not path or getattr(self, "_training", None):
+            return False
+        now = now or self.clock()
+        job = {"done": threading.Event(), "report": None, "error": None, "t0": time.time()}
+
+        def work():
+            con = store.connect(path)
+            try:
+                job["report"] = train.train_all(self.config, con, self.model_dir, now_ts=now, labels=self.labels,
+                                                quiet=True)
+            except Exception as e:  # noqa: BLE001 — reported by finish_retrain
+                job["error"] = e
+            finally:
+                con.close()
+                job["done"].set()
+
+        self._training = job
+        threading.Thread(target=work, name="ai-retrain", daemon=True).start()
+        return True
+
+    def training(self):
+        return bool(getattr(self, "_training", None))
+
+    def finish_retrain(self, now=None):
+        """-> None while training, else the new report (raises the training error, if any)."""
+        job = getattr(self, "_training", None)
+        if not job or not job["done"].is_set():
+            return None
+        self._training = None
+        if job["error"]:
+            raise job["error"]
+        self.report = job["report"]
+        self.report["train_seconds"] = round(time.time() - job["t0"], 1)
+        self.reload(self.config)
+        self.publish_insights(now or self.clock())
         return self.report
 
     # ------------------------------------------------------------------ insights (/ai_insights)

@@ -34,3 +34,5 @@ database-debug.log
 Thumbs.db
 .idea/
 pi/twin/reports/
+*.db-wal
+*.db-shm

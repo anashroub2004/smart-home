@@ -35,6 +35,7 @@ import math
 import queue
 import random
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -155,6 +156,7 @@ class House:
         self.override_until = {}         # device -> ts; manual control pauses AI/rules
         self.empty_since = {}            # room -> ts
         self.dark_since = {}             # room -> ts the person has been sitting in the dark
+        self.manual_at = {}              # device -> ts of the last app / wall-button control
         self.energy_day = day_key()
         self.energy = dict(w.get_energy_day(self.energy_day))
         self.failed_door = 0
@@ -176,6 +178,10 @@ class House:
         self.recent = deque(maxlen=80)   # latest events for the twin page
         self.changes = deque(maxlen=4000)  # (ts, kind, id, value) today: device on/off + person room, for the timeline
         self.commands = queue.Queue()    # from the twin page
+        self.wake = threading.Event()    # set by the twin page: handle its command now, not at the next tick
+        self.resume_after_train = True
+        self.twin_seq = 0
+        self.twin_pack = ('"0"', b"{}")
         self.counts = {}                 # "rule_on", "ai_off", "manual_off", ... (who switched what, for the twin)
         self.twin_json = b"{}"
         self.scenarios = None            # pi/scenarios.py runner (set in main)
@@ -370,6 +376,7 @@ class House:
         after = {k: st.get(k) for k in keys if st.get(k) is not None}
         after_label = self.state_label(device, st)
         if source in ("web", "button"):
+            self.manual_at[device] = CLOCK.now()
             self.override_until[device] = CLOCK.now() + self.th["override_pause_min"] * 60 / self.speedup
             if self.ai:
                 self.ai_safe(self.ai.on_manual, device)
@@ -565,7 +572,9 @@ class House:
                     continue
                 st, r = self.devices[dev], self.drules(dev)
                 empty_min = th["empty_room_off_min"]
-                empty_for = t - self.empty_since.get(rid, t)
+                # counted from the later of "room empty" and your last manual control: switching a light on in an
+                # empty room (wall button, app) is not undone a second later
+                empty_for = t - max(self.empty_since.get(rid, t), self.manual_at.get(dev, 0))
                 rule = dict(source="rule", src_label="Rule", group="rule", by_label="Automation", tags=["rule"])
                 # AI pre-cooling (its waste guard decides) or the AI's smart-off timer is running: the rule waits
                 guarded = bool(self.ai and (self.ai_safe(self.ai.guarding, dev) or self.ai_safe(self.ai.counting_off, dev)))
@@ -697,15 +706,38 @@ class House:
         return (t if t > vnow() else t + timedelta(days=1)).timestamp()
 
     def run_ai(self):
-        if not self.ai:
+        if not self.ai or self.ai_training():
             return
         if CLOCK.now() >= self.next_train:            # nightly retraining at 03:00 (virtual clock)
             self.next_train = self.next_3am()
-            CLOCK.pause()
-            self.ai_safe(self.ai.retrain, quiet=True)
-            CLOCK.resume()
-            self.clean_suggestions()
+            self.resume_after_train = not CLOCK.paused
+            CLOCK.pause()                             # the virtual day waits for the new models
+            if self.ai_safe(self.ai.start_retrain):   # in the background: the house and the twin page stay live
+                return
+            self.ai_safe(self.ai.retrain, quiet=True)  # in-memory DB: no second connection possible
+            self.after_retrain()
+            return
         self.ai_safe(self.ai.plan, self.house_snapshot())
+
+    def ai_training(self):
+        return bool(self.ai and self.ai_safe(self.ai.training))
+
+    def check_retrain(self):
+        """Background retraining finished? Install the models, continue the day, plan."""
+        if not self.ai_training():
+            return
+        try:
+            if self.ai.finish_retrain() is None:
+                return
+        except Exception as e:  # noqa: BLE001 — keep the old models
+            print(f"! AI retraining failed ({type(e).__name__}: {e}) — keeping the previous models")
+        self.after_retrain()
+        self.ai_safe(self.ai.plan, self.house_snapshot())
+
+    def after_retrain(self):
+        if self.resume_after_train:
+            CLOCK.resume()
+        self.clean_suggestions()
 
     def ai_tick(self, dt):
         if not self.ai:
@@ -853,15 +885,26 @@ class House:
 
     # ------------------------------------------------ digital twin: commands + state for the page
     def handle_twin_commands(self):
+        """Commands from the twin page. The page waits for the new state: rebuild it at once, then answer."""
+        done = []
         while True:
             try:
                 c = self.commands.get_nowait()
             except queue.Empty:
-                return
+                break
+            ev = c.pop("_done", None)
+            if ev:
+                done.append(ev)
             try:
                 self.twin_command(c)
             except Exception as e:  # noqa: BLE001 — a bad command must never stop the house
                 print(f"! twin command {c}: {e}")
+        if done:
+            self.person_tick()
+            self.update_sensors()                     # a moved person / pressed button shows on the sensors now
+            self.twin_state()
+            for ev in done:
+                ev.set()
 
     def twin_command(self, c):
         a = c.get("action")
@@ -869,8 +912,10 @@ class House:
             CLOCK.set_speed(float(c["value"]))
         elif a == "pause":
             CLOCK.pause()
+            self.resume_after_train = False
         elif a == "resume":
             CLOCK.resume()
+            self.resume_after_train = True
         elif a == "jump":
             CLOCK.jump_to(c["time"])
         elif a == "move":
@@ -917,6 +962,7 @@ class House:
                             "button": bool(self.ctrl(dev).get("button")), "fault": self.faults.get(dev),
                             "paused": self.paused(dev), "state": self.state_label(dev, st)}
         state = {
+            "ai_busy": self.ai_training(),
             "now": now, "day0": day0, "speed": CLOCK.speed, "paused": CLOCK.paused, "legacy_fast": self.speedup > 1,
             "mode": "twin-only" if self.args.twin_only else ("cloud" if self.args.cloud else "emulator"),
             "person": {"room": self.person.room, "activity": self.person.activity, "still": self.person.still,
@@ -931,7 +977,11 @@ class House:
             "ai": self.ai_safe(self.ai.twin_view, house, now) if self.ai else None,
             "scenarios": self.scenarios.view() if self.scenarios else None,
         }
-        self.twin_json = json.dumps(state, default=str).encode()
+        body = json.dumps(state, default=str).encode()
+        if body != self.twin_json:
+            self.twin_seq += 1
+            self.twin_pack = (f'"{self.twin_seq}"', body)   # one tuple: the page never gets a body with the wrong tag
+            self.twin_json = body
 
     # ------------------------------------------------ periodic writes
     def write_state(self, power):
@@ -1004,8 +1054,9 @@ class House:
                     power = self.update_power(dt if dt < 3600 else 0)
                     if self.ai and self.ai.suggestions:   # read answers first, so "Yes" is never seen as expired
                         self.handle_suggestion_answers()
-                    self.ai_tick(t - self.last.get("ai_tick", t))
-                    self.last["ai_tick"] = t
+                    if not self.ai_training():
+                        self.ai_tick(t - self.last.get("ai_tick", t))
+                        self.last["ai_tick"] = t
                     if self.scenarios:
                         self.scenarios.tick()
                     if r - real.get("state", 0) >= state_real_s:
@@ -1020,6 +1071,7 @@ class House:
                     self.last["summary"] = t
                     real["summary"] = r
                     self.write_summary()
+                self.check_retrain()
                 if t - self.last["ai"] >= 900 / sp:
                     self.last["ai"] = t
                     self.run_ai()
@@ -1028,7 +1080,8 @@ class House:
                 hint = "check your internet / key" if self.args.cloud else "are the emulators running? `firebase emulators:start`"
                 print(f"! {e}  ({hint})")
                 time.sleep(3)
-            time.sleep(TICK_S)
+            self.wake.wait(TICK_S)                    # a twin command wakes the loop at once
+            self.wake.clear()
 
 
 def main():

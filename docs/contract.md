@@ -75,7 +75,7 @@
 | `caps.lock` | `{open_s}` | قفل يفتح مؤقتاً (الباب) |
 | `control.app/button/rules/ai` | `true/false` | من يُسمح له بالتغيير. جهاز مراقبة = كلها `false` |
 | `control.confirm` | `true` | يطلب تأكيداً قبل التنفيذ |
-| `rules.off_when_empty` | | يُطفأ بعد فراغ الغرفة `empty_room_off_min` دقيقة — **ينتظر** إذا كان الـ AI يحرس تشغيلاً مسبقاً (`ai.guarding`) أو يعدّ إطفاءً ذكياً (`ai.counting_off`، غرفة فيها رادار) |
+| `rules.off_when_empty` | | يُطفأ بعد فراغ الغرفة `empty_room_off_min` دقيقة (تُحسب من آخر تحكم يدوي إن كان أحدث من بدء الفراغ) — **ينتظر** إذا كان الـ AI يحرس تشغيلاً مسبقاً (`ai.guarding`) أو يعدّ إطفاءً ذكياً (`ai.counting_off`، غرفة فيها رادار) |
 | `rules.on_when_dark` | | يعمل عند الظلام **لحظة دخول شخص** للغرفة (أول فحص بعد بدء الوجود أو خلال 90 ث، `light_on_lux`) — لا يعيد تشغيل ضوء أطفأه شخص نائم أو جالس |
 | `rules.follow_temp` | | يعمل فوق `fan_on_temp` ويُطفأ تحت `fan_off_temp` |
 | `rules.alert_if_off_min` | رقم | للمراقبة: تنبيه إذا توقف أكثر من N دقيقة (ثلاجة) |

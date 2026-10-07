@@ -2,7 +2,7 @@
 
     GET  /         the page (pi/twin/index.html)
     GET  /state    everything the page draws, as JSON (refreshed by the simulator every tick)
-    POST /cmd      a control from the page, e.g. {"action": "speed", "value": 60}
+    POST /cmd      a control from the page, e.g. {"action": "speed", "value": 60} -> the state right after it
 
 Only listens on this computer (127.0.0.1). Python standard library only; nothing goes to Firebase.
 """
@@ -21,10 +21,12 @@ def start_twin(house, port=8765):
         def log_message(self, *args):          # keep the simulator's console readable
             pass
 
-        def _send(self, code, body, ctype):
+        def _send(self, code, body, ctype, etag=None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "no-cache")
+            if etag:
+                self.send_header("ETag", etag)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -33,7 +35,13 @@ def start_twin(house, port=8765):
             if self.path in ("/", "/index.html"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             elif self.path.startswith("/state"):
-                self._send(200, house.twin_json, "application/json")
+                tag, body = house.twin_pack
+                if self.headers.get("If-None-Match") == tag:     # nothing new since the last poll
+                    self.send_response(304)
+                    self.send_header("ETag", tag)
+                    self.end_headers()
+                    return
+                self._send(200, body, "application/json", etag=tag)
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -47,8 +55,14 @@ def start_twin(house, port=8765):
                 return self._send(400, b"bad json", "text/plain")
             if not isinstance(cmd, dict) or cmd.get("action") not in ALLOWED:
                 return self._send(400, b"unknown action", "text/plain")
+            # wait (briefly) until the house applied it, then answer with the new state: the page updates at once
+            done = threading.Event()
+            cmd["_done"] = done
             house.commands.put(cmd)
-            self._send(200, b'{"ok":true}', "application/json")
+            house.wake.set()
+            done.wait(2.0)
+            tag, body = house.twin_pack
+            self._send(200, body, "application/json", etag=tag)
 
     server = None
     for p in range(port, port + 10):           # the port may be busy (another simulator)

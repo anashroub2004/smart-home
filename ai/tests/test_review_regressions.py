@@ -92,6 +92,28 @@ class Regressions(unittest.TestCase):
         rt.on_manual("living_light", NOW + 90)                     # app control while empty: AI hands off
         self.assertFalse(rt.counting_off("living_light"))
 
+    def test_background_retrain_keeps_the_house_responsive(self):
+        """Twin perf 2026-10-08: nightly retraining froze the simulator ~15 s. It now runs in a thread with its own
+        SQLite connection; the main thread keeps writing and installs the result when it is ready."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        con = store.connect(Path(tmp.name) / "hub.db")
+        synth.fill(con, self.cfg, days=9, end_ts=NOW - 600, seed=3)
+        rt = AIRuntime(self.cfg, con, RecSink(), model_dir=Path(tmp.name) / "m", clock=lambda: NOW)
+        self.assertTrue(rt.start_retrain(NOW))
+        self.assertFalse(rt.start_retrain(NOW))                    # one at a time
+        store.write(con, [(NOW, "override/living_light", 1)])     # the house keeps writing meanwhile
+        deadline = time.time() + 120
+        report = None
+        while report is None and time.time() < deadline:
+            report = rt.finish_retrain(NOW)
+            time.sleep(0.05)
+        self.assertIsNotNone(report)
+        self.assertFalse(rt.training())
+        self.assertIn("devices", report)
+        mem = AIRuntime(self.cfg, memory_db(), RecSink(), model_dir=Path(tmp.name) / "m2", clock=lambda: NOW)
+        self.assertFalse(mem.start_retrain(NOW))                    # in-memory DB: caller retrains in place
+
     def test_room_without_radar_is_never_vacant(self):
         """Bug 2: no presence sensors (or PIR only) must not count as an empty room."""
         self.assertFalse(gate.room_vacant({"occ": 0}, []))

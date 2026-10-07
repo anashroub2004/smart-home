@@ -27,7 +27,9 @@ def connect(db_path=None):
     path = str(db_path or S.DB_PATH)
     if path != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path, check_same_thread=False)
+    con = sqlite3.connect(path, check_same_thread=False, timeout=30)
+    if path != ":memory:":
+        con.execute("PRAGMA journal_mode=WAL")      # retraining (background thread) reads while the house writes
     con.execute("CREATE TABLE IF NOT EXISTS readings (ts INTEGER, key TEXT, value REAL)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_ts ON readings(ts)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_key_ts ON readings(key, ts)")
