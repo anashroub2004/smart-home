@@ -162,3 +162,39 @@ export function minutesText(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h} h ${m % 60} m`;
 }
+
+// ---------------------------------------------------------------- AI words
+
+/** Feature groups from the model's explanations -> words for people. */
+export const DRIVER_LABEL: Record<string, string> = {
+  time: "Time of day",
+  habit: "Your habit",
+  presence: "Someone there",
+  temperature: "Temperature",
+  light: "Daylight",
+  "other devices": "Other devices",
+  other: "Other",
+};
+
+/** Top drivers as [label, percent], biggest first. */
+export function topDrivers(importance?: Record<string, number>, n = 3): [string, number][] {
+  return Object.entries(importance ?? {})
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, n)
+    .map(([k, v]) => [DRIVER_LABEL[k] ?? k, Math.round(v * 100)]);
+}
+
+export function aiStatusText(status?: string, days?: number): { text: string; color: string } {
+  if (status === "ready") return { text: "Ready", color: C.good };
+  if (status === "relearning") return { text: "Relearning", color: C.warn };
+  return { text: `Learning · ${days ?? 0} of 21 days`, color: C.muted };
+}
+
+export const WASTE_CAUSE: Record<string, { label: string; hint: string; color: string }> = {
+  forgotten: { label: "Left on in an empty room", hint: "Nothing was going to switch it off", color: C.bad },
+  rule_delay: { label: "Waiting for auto-off", hint: "The minutes before an empty room switches it off", color: C.warn },
+  ai: { label: "AI guessed wrong", hint: "Switched on for you, but nobody came", color: "#8FB8FF" },
+  standby: { label: "Standby", hint: "Drawing power while off", color: C.muted },
+};
+
+export const pct = (x?: number | null) => (x === undefined || x === null ? "—" : `${Math.round(x * 100)}%`);

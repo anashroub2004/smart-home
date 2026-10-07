@@ -2,9 +2,9 @@
 
 import { useMemo } from "react";
 import { ICheck } from "@/components/Icons";
-import { useConfig, useEnergyDaily, useEvents, useHomeState } from "@/lib/home";
+import { useConfig, useEnergyDaily, useEnergyWaste, useEvents, useHomeState } from "@/lib/home";
 import { clock, dayKey } from "@/lib/format";
-import { allDevices, C, isToday } from "@/lib/view";
+import { allDevices, C, isToday, WASTE_CAUSE } from "@/lib/view";
 
 const total = (d?: Record<string, number>) => Object.values(d ?? {}).reduce((a, b) => a + b, 0);
 
@@ -13,6 +13,7 @@ export default function EnergyPage() {
   const { data: state } = useHomeState();
   const { data: daily } = useEnergyDaily();
   const { list: events } = useEvents(400);
+  const { data: wasteDay } = useEnergyWaste(dayKey());
 
   const today = daily?.[dayKey()];
   const todayWh = total(today);
@@ -34,6 +35,25 @@ export default function EnergyPage() {
     const max = Math.max(1, ...days.map((d) => d.wh));
     return days.map((d) => ({ ...d, h: `${Math.max(4, (d.wh / max) * 100)}%` }));
   }, [daily]);
+
+  const wasted = useMemo(() => {
+    const labels = Object.fromEntries(allDevices(config).map((d) => [d.id, d.label]));
+    const byCause: Record<string, number> = {};
+    const byDev: { name: string; wh: number; cause: string }[] = [];
+    for (const [dev, causes] of Object.entries(wasteDay ?? {})) {
+      let top = "", topWh = 0, sum = 0;
+      for (const [cause, v] of Object.entries(causes ?? {})) {
+        byCause[cause] = (byCause[cause] ?? 0) + (v ?? 0);
+        sum += v ?? 0;
+        if ((v ?? 0) > topWh) [top, topWh] = [cause, v ?? 0];
+      }
+      if (sum > 0.005) byDev.push({ name: labels[dev] ?? dev, wh: sum, cause: top });
+    }
+    const total = Object.values(byCause).reduce((a, b) => a + b, 0);
+    const causes = Object.keys(WASTE_CAUSE).filter((c) => (byCause[c] ?? 0) > 0.005)
+      .map((c) => ({ id: c, wh: byCause[c], pct: total ? `${(byCause[c] / total) * 100}%` : "0%" }));
+    return { total, causes, devices: byDev.sort((a, b) => b.wh - a.wh).slice(0, 4) };
+  }, [config, wasteDay]);
 
   const byDevice = useMemo(() => {
     const rows = [{ name: "Hub, nodes & sensors", wh: today?._base ?? 0 }];
@@ -78,6 +98,30 @@ export default function EnergyPage() {
             </div>
           ))}
           {!waste.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Nothing left running in an empty room so far today.</div>}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="h-label">Wasted today · <span className="num">{wasted.total.toFixed(1)} Wh</span></h2>
+        {wasted.causes.map((c) => (
+          <div key={c.id} className="list-row" style={{ alignItems: "flex-start" }}>
+            <span className="dot" style={{ background: WASTE_CAUSE[c.id].color, marginTop: 6 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div>{WASTE_CAUSE[c.id].label}</div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{WASTE_CAUSE[c.id].hint}</div>
+            </div>
+            <div className="conf" style={{ maxWidth: 90, marginTop: 7 }}><span style={{ width: c.pct, background: WASTE_CAUSE[c.id].color }} /></div>
+            <span className="num" style={{ width: 64, textAlign: "right" }}>{c.wh.toFixed(1)} Wh</span>
+          </div>
+        ))}
+        {wasted.devices.length > 0 && (
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+            Most: {wasted.devices.map((d) => `${d.name} ${d.wh.toFixed(1)} Wh`).join(" · ")}
+          </div>
+        )}
+        {!wasted.causes.length && <div className="empty">No energy used in empty rooms today.</div>}
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Counted only while the radar and the motion sensor both see an empty room.
         </div>
       </section>
 

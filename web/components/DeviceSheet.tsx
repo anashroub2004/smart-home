@@ -9,6 +9,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import {
   removeDevice,
   setAiPause,
+  useAiInsights,
   useAiPause,
   useAiSchedule,
   useConfig,
@@ -20,7 +21,7 @@ import {
   useSummaries,
 } from "@/lib/home";
 import { clock, dayKey } from "@/lib/format";
-import { appControllable, defaultLevel, deviceWatts, findDevice, isLock, isMonitorOnly, isToday, levelLabel } from "@/lib/view";
+import { appControllable, defaultLevel, deviceWatts, findDevice, isLock, isMonitorOnly, isToday, levelLabel, pct, topDrivers } from "@/lib/view";
 import { SourceTag } from "./EventItem";
 import { IClose } from "./Icons";
 import { useToast } from "./Toast";
@@ -54,6 +55,7 @@ function DeviceSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const { data: daily } = useEnergyDaily();
   const { data: schedule } = useAiSchedule();
   const { data: pauseUntil } = useAiPause(id);
+  const { data: insights } = useAiInsights();
   const { list: events } = useEvents(300);
   const dev = findDevice(config, id);
   const cmd = useDeviceCommand(id, () => toast(`${dev?.label ?? "The device"} didn't respond. Nothing changed.`));
@@ -102,7 +104,10 @@ function DeviceSheet({ id, onClose }: { id: string; onClose: () => void }) {
     const ratedW = cfg.caps.level ? (cfg.watts * (st?.level ?? 70)) / 100 : cfg.watts;
     const hoursOn = sumToday ? minutesOn / 60 : ratedW ? todayWh / ratedW : 0;
     const paused = !!pauseUntil && pauseUntil > Date.now();
-    const learning = !!cfg.added_at && Date.now() - cfg.added_at < LEARNING_MS;
+    const aiDev = insights?.devices?.[id];
+    // the hub's own view wins; added_at is only a fallback before the first training report arrives
+    const learning = aiDev ? aiDev.status === "learning" : !!cfg.added_at && Date.now() - cfg.added_at < LEARNING_MS;
+    const drivers = topDrivers(aiDev?.importance, 2);
     const plan = schedule?.[id];
     const hasPlan = plan && (plan.action === "schedule_on" || plan.action === "keep_on") && plan.title;
     const pauseMin = config.thresholds.override_pause_min ?? 120;
@@ -117,12 +122,14 @@ function DeviceSheet({ id, onClose }: { id: string; onClose: () => void }) {
           ? `AI plan: ${plan!.title!.toLowerCase()} at ${plan!.time}`
           : "No AI plan in the next hour";
     const aiSub = learning
-      ? "Predictions start after about 3 weeks of use"
+      ? `Predictions start after about 3 weeks of use${aiDev?.days !== undefined ? ` (${aiDev.days} of 21 days)` : ""}`
       : paused
         ? "You took control, so the AI leaves this device alone."
         : hasPlan
-          ? `${Math.round(plan!.p_on * 100)}% sure · pause to keep control`
-          : "Pause the AI to keep full control";
+          ? plan!.why ?? `${Math.round(plan!.p_on * 100)}% sure · pause to keep control`
+          : aiDev
+            ? `Acts at ${pct(aiDev.act)} sure${drivers.length ? ` · depends most on ${drivers.map(([n]) => n.toLowerCase()).join(" and ")}` : ""}`
+            : "Pause the AI to keep full control";
 
     const stateText = offline
       ? "Not responding"

@@ -49,7 +49,8 @@ def local_contributions(model, x, typical):
 
 
 def why_text(spec, x, contrib, p, action, label_ctx=None):
-    """Short English sentence for the web app, built from the real values that pushed the decision."""
+    """Short English sentence for the web app, built from the real values that pushed the decision.
+    No percentage in it: the app and the event log show the confidence next to it."""
     row = x.iloc[0]
     parts = []
     want_on = action in ("schedule_on", "keep_on", "suggest_on")
@@ -100,9 +101,8 @@ def why_text(spec, x, contrib, p, action, label_ctx=None):
                 parts.append(f"{', '.join(names)} on")
         if len(parts) == 3:
             break
-    sure = f"{round(p * 100)}% sure" if want_on else f"{round((1 - p) * 100)}% sure it is not needed"
     text = " · ".join(dict.fromkeys(parts)) or ("your usual routine" if want_on else "usually off by now")
-    return f"{text[0].upper()}{text[1:]} · {sure}"
+    return f"{text[0].upper()}{text[1:]}"          # the confidence is shown separately (bar / "84% sure")
 
 
 # ---------------------------------------------------------------- learned patterns

@@ -362,7 +362,7 @@ class AIRuntime:
                 pct = round(pend["p"] * 100)
                 actions.append(dict(device=dev, v=1, level=pend["level"], confidence=round(pend["p"], 2),
                                     src_label=f"AI · {pct}%", short=self.short_on(spec),
-                                    why=f"{pend['why']} · checked: {reason}"))
+                                    why=f"{pend['why']} · {pct}% sure · checked: {reason}"))
                 target = max(pend["target"], now)
                 self.guards[dev] = dict(on_at=now, deadline=target + self.minutes(spec.grace_min), p=pend["p"])
                 self.stat("ai_on")
@@ -422,7 +422,7 @@ class AIRuntime:
                                     short=f"Room empty {round(wait_min)} min · saves ~{saved} Wh",
                                     why=f"Radar and motion sensor both saw nobody for {round(wait_min)} min{note} · "
                                         f"~{saved} Wh saved over the next hour (estimate)",
-                                    title=f"{self.labels.get(dev, dev)} turned off — room empty"))
+                                    title=f"{self.labels.get(dev, dev)} turned off"))
 
         # 4. suggestions expire after 15 min or when the situation changed
         for sid in list(self.suggestions):

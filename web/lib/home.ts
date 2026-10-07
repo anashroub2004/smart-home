@@ -166,14 +166,20 @@ export async function applyScene(sceneId: string, setMap: Record<string, SceneVa
   );
 }
 
-export async function answerSuggestion(id: string, s: Suggestion, accept: boolean) {
-  await update(ref(fbDb(), PATHS.suggestion(id)), { response: accept ? "accept" : "dismiss" });
+/** Returns false when the suggestion was already withdrawn by the hub (expired or the room changed). */
+export async function answerSuggestion(id: string, s: Suggestion, accept: boolean): Promise<boolean> {
+  try {
+    await update(ref(fbDb(), PATHS.suggestion(id)), { response: accept ? "accept" : "dismiss" });
+  } catch {
+    return false; // the rules only allow answering a suggestion that still exists
+  }
   if (accept) {
     await sendCommand(s.device, s.action === "on" ? 1 : 0, {}, {
       via: "suggestion",
       confidence: s.confidence,
     });
   }
+  return true;
 }
 
 /** minutes = null resumes automation now. */

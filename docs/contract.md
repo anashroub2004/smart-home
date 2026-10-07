@@ -160,7 +160,7 @@
 
 ```json
 { "device": "bedroom_fan", "p_on": 0.84, "action": "schedule_on", "status": "ready", "time": "19:30",
-  "title": "Bedroom fan turns on", "why": "Pre-cooling · room 29.4°C · your usual time · someone is home · 84% sure",
+  "title": "Bedroom fan turns on", "why": "Pre-cooling · room 29.4°C · your usual time · someone is home",
   "predicted_for": "2026-10-01T19:45", "execute_at": "2026-10-01T19:30", "act_at": 0.7, "suggest_at": 0.5 }
 ```
 
@@ -169,7 +169,7 @@
 
 ```json
 { "device": "living_fan", "action": "off", "confidence": 0.68, "title": "Turn off the living room fan?",
-  "why": "Nobody is in the room · usually off at this time · 68% sure it is not needed", "at": 1759300000000,
+  "why": "Nobody is in the room · usually off at this time", "at": 1759300000000,
   "expires_at": 1759300900000, "response": "accept", "handled": true, "done_text": "Done." }
 ```
 
