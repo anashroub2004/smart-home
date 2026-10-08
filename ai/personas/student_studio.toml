@@ -1,0 +1,215 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+#  The person who lives in the studio — ONE file for the simulated history the AI trains on (ai/lifesim.py)
+#  and for the live person in the digital twin (pi/person.py). Edit it, regenerate, retrain.
+#
+#  Three layers, like a real person:
+#    1. fixed habits     : the shape of a day (wake, bathroom, breakfast, classes, cooking, study, sleep)
+#    2. changing habits  : a weekly timetable that differs per day, semesters / exams / summer job / breaks,
+#                          Ramadan, seasons (weather, sunset), bedtime drifting later through a semester
+#    3. unusual days     : sick, insomnia, guests, oversleeping, nights out, all-nighters, trips, power cuts
+#  plus the MANUAL commands he gives (switches, the app) — with the mistakes people make (forgetting lights).
+#
+#  Times are "HH:MM" (house time, Asia/Hebron). Jitter is in minutes (normal distribution, 1 sigma).
+#  Probabilities are 0..1 per day (or per occasion where it says so). Same seed + same date = same day.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+[person]
+name = "University student, studio flat"
+seed = 2026
+weekend = ["Fri", "Sat"]
+
+# ── 2. calendar: what kind of period a date is in (month-day, every year) ───────────────────────────────────
+#  kind: semester | exams | break | summer_job | free
+[[period]]
+name = "Fall semester"
+from = "09-01"
+to = "12-17"
+kind = "semester"
+
+[[period]]
+name = "Fall exams"
+from = "12-18"
+to = "01-08"
+kind = "exams"
+
+[[period]]
+name = "Winter break"
+from = "01-09"
+to = "01-31"
+kind = "break"
+
+[[period]]
+name = "Spring semester"
+from = "02-01"
+to = "05-24"
+kind = "semester"
+
+[[period]]
+name = "Spring exams"
+from = "05-25"
+to = "06-10"
+kind = "exams"
+
+[[period]]
+name = "Free days"
+from = "06-11"
+to = "06-24"
+kind = "free"
+
+[[period]]
+name = "Summer job"
+from = "06-25"
+to = "08-05"
+kind = "summer_job"
+
+[[period]]
+name = "Summer break"
+from = "08-06"
+to = "08-31"
+kind = "free"
+
+# Ramadan moves every year (dates by year). During it: suhoor before dawn, iftar at sunset, late nights.
+# Set enabled = false to leave it out.
+[ramadan]
+enabled = true
+dates = { 2025 = ["03-01", "03-30"], 2026 = ["02-18", "03-19"], 2027 = ["02-08", "03-09"], 2028 = ["01-28", "02-26"] }
+eid_days = 3                       # after Ramadan: family visits most of the day
+
+# trips: away (the house in Away mode). Month-day + days; the exact start moves a little every year.
+[[trip]]
+name = "Summer trip"
+from = "08-12"
+days = 7
+
+[[trip]]
+name = "Winter break at the family"
+from = "01-14"
+days = 4
+
+[[trip]]
+name = "Spring weekend away"
+from = "04-09"
+days = 2
+
+# ── 2. weekly timetable per kind of period ──────────────────────────────────────────────────────────────────
+#  leave / back: classes or work. gym / out / family: evening or weekend plans (p = how often it happens).
+[timetable.semester]
+Sun = { leave = "07:35", back = "14:20" }
+Mon = { leave = "09:40", back = "16:30", gym = ["18:00", "19:30", 0.75] }
+Tue = { leave = "07:35", back = "14:20" }
+Wed = { leave = "09:40", back = "16:30", gym = ["18:00", "19:30", 0.7] }
+Thu = { leave = "07:35", back = "12:45", out = ["20:00", "23:30", 0.6] }
+Fri = { family = ["12:00", "17:30", 0.75] }
+Sat = { out = ["17:00", "20:00", 0.35] }
+
+[timetable.exams]                  # one exam every few days, otherwise studying at home
+Sun = { leave = ["08:30", 0.45], back = "12:00" }
+Mon = { leave = ["08:30", 0.45], back = "12:00" }
+Tue = { leave = ["08:30", 0.45], back = "12:00" }
+Wed = { leave = ["08:30", 0.45], back = "12:00" }
+Thu = { leave = ["08:30", 0.45], back = "12:00" }
+Fri = { family = ["13:00", "16:00", 0.5] }
+Sat = {}
+
+[timetable.summer_job]
+Sun = { leave = "08:20", back = "16:10" }
+Mon = { leave = "08:20", back = "16:10" }
+Tue = { leave = "08:20", back = "16:10" }
+Wed = { leave = "08:20", back = "16:10" }
+Thu = { leave = "08:20", back = "16:10", out = ["20:30", "00:30", 0.55] }
+Fri = { family = ["12:00", "18:00", 0.7] }
+Sat = { out = ["18:00", "22:00", 0.4] }
+
+[timetable.break]
+Sun = { out = ["17:00", "21:00", 0.4] }
+Mon = { out = ["11:00", "15:00", 0.3] }
+Tue = { out = ["17:00", "21:00", 0.4] }
+Wed = { out = ["11:00", "15:00", 0.3] }
+Thu = { out = ["19:00", "00:00", 0.6] }
+Fri = { family = ["12:00", "18:00", 0.75] }
+Sat = { out = ["15:00", "19:00", 0.4] }
+
+[timetable.free]
+Sun = { out = ["18:00", "22:00", 0.45] }
+Mon = { out = ["10:30", "14:00", 0.35] }
+Tue = { out = ["18:00", "22:00", 0.45] }
+Wed = { out = ["10:30", "14:00", 0.35] }
+Thu = { out = ["20:00", "01:00", 0.65] }
+Fri = { family = ["12:00", "18:00", 0.7] }
+Sat = { out = ["16:00", "21:00", 0.45] }
+
+# ── 1. fixed shape of a day ─────────────────────────────────────────────────────────────────────────────────
+#  wake: before leaving (minutes), or the usual time on days at home. sleep: usual bedtime per kind.
+#  drift: bedtime moves later through a semester (minutes per week) — habits change slowly.
+[sleep]
+wake_before_leave = [55, 10]       # minutes before leaving, jitter
+wake_home = { semester = ["09:30", 50], exams = ["09:00", 45], break = ["10:45", 60], summer_job = ["09:30", 50], free = ["10:30", 60] }
+bedtime = { semester = ["00:10", 35], exams = ["01:20", 45], break = ["01:15", 50], summer_job = ["23:30", 30], free = ["01:00", 50] }
+weekend_later = 50                 # minutes later at weekends
+semester_drift_per_week = 3        # bedtime gets later through a semester
+read_in_bed = [20, 10]             # minutes, jitter
+nap = { p = 0.3, after_back = [30, 20], minutes = [45, 20] }   # afternoon nap on days with classes
+
+[meals]
+breakfast_p = 0.75                 # skipped when late
+cook_lunch_p = 0.35                # on days at home or back before 15:00
+cook_dinner_p = 0.65
+dinner = ["19:30", 40]
+cook_minutes = [35, 12]
+eat_minutes = [25, 8]
+
+[bathroom]
+shower_morning_p = 0.55            # otherwise in the evening (or not at all some days)
+shower_evening_p = 0.35
+shower_minutes = [14, 4]
+visits_per_hour_home = 0.18        # short visits while at home
+
+[study]
+blocks = { semester = [2, 1], exams = [4, 1], break = [0, 1], summer_job = [0, 1], free = [1, 1] }   # per day, jitter
+minutes = [90, 30]
+tea_p = 0.55                       # kettle before a study block
+trip_p = 0.25                      # short kitchen trip during a block
+
+# ── manual commands: how he controls the house himself (the history before the AI) ──────────────────────────
+[habits]
+light_on_dark = 0.95               # switches the light on when he walks into a dark room
+light_on_delay_min = [0.5, 0.4]
+light_off_leave = 0.6              # switches it off when he leaves the room (the rest: forgotten)
+light_off_sleep = 0.88             # switches the bedroom light off when he goes to sleep
+forgot_light_notice_min = [45, 30] # a forgotten light is noticed later (when he passes by / comes back)
+fan_on_temp = [27.8, 0.7]          # his personal "too warm" (°C) — a little different every day
+fan_on_p = 0.85
+fan_off_leave = 0.5
+fan_sleep_level = 40
+app_precool_p = 0.25               # hot days: starts the fan from the app before coming home
+app_precool_min = [15, 5]
+hood_on_cooking = 0.85
+hood_off_after_min = [6, 4]
+hood_forget_p = 0.15
+vent_on_shower = 0.8
+vent_off_after_min = [15, 6]
+vent_forget_p = 0.2
+laundry = { day = "Sat", p = 0.6, at = ["11:00", 60], minutes = 75 }
+kettle_minutes = [3, 1]
+
+# ── 3. unusual days (probability per day, unless stated) ────────────────────────────────────────────────────
+[unusual]
+oversleep = 0.07                   # alarm missed: late, no breakfast, rushed
+sick = 0.025                       # at home all day, mostly in bed, tea, many bathroom visits
+insomnia = 0.05                    # awake 30-70 min in the middle of the night
+guests = { weekday = 0.04, weekend = 0.12 }   # friends in the evening, late, more light and fan
+late_night = 0.05                  # back home after 01:00
+all_nighter = 0.2                  # exam periods only: sleeps at ~04:00
+power_cut = 0.004                  # 1-3 h without power: devices off, nodes silent
+fridge_door_ajar = 0.01            # fridge works harder for 2-3 h
+fell_asleep_light_on = 0.1         # included in light_off_sleep, listed for the diary
+heat_wave = 0.03                   # chance a heat wave (3-5 days, +5 °C) starts on a given day (Apr-Sep)
+
+# ── climate (Hebron, ~930 m) — monthly mean max / min (°C) ─────────────────────────────────────────────────
+[climate]
+max = [11, 12, 16, 21, 25, 28, 29, 29, 28, 24, 18, 13]
+min = [3, 4, 6, 9, 13, 16, 18, 18, 16, 13, 9, 5]
+humidity = [72, 70, 62, 52, 45, 50, 55, 58, 56, 55, 60, 70]
+indoor_offset = 3.5                # the studio is warmer than outside (people, appliances, sun)
+latitude = 31.53
+longitude = 35.10

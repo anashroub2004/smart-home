@@ -247,6 +247,24 @@ export const IGeneric = (p: P) => (
     <path d="M6.3 6.8a8 8 0 1 0 11.4 0" />
   </Svg>
 );
+export const IHood = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M9 3h6v5l5 6H4l5-6z" />
+    <path d="M7 18h.01M12 18h.01M17 18h.01" />
+  </Svg>
+);
+export const IVent = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
+    <path d="M12 12c0-3 1.5-5 4-5M12 12c3 0 5 1.5 5 4M12 12c0 3-1.5 5-4 5M12 12c-3 0-5-1.5-5-4" />
+  </Svg>
+);
+export const IKettle = (p: P) => (
+  <Svg sw={1.9} {...p}>
+    <path d="M6 20h12l-1.5-10h-9z" />
+    <path d="M8 10a4 4 0 0 1 8 0M16.5 12.5l3-2.5M12 4V3" />
+  </Svg>
+);
 export const IPlus = (p: P) => (
   <Svg sw={2} {...p}>
     <path d="M12 5v14M5 12h14" />

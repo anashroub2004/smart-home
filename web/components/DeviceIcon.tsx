@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { DeviceIconName } from "@/lib/contract";
-import { IAc, IFan, IFridge, IGeneric, IHeater, ILight, ILockClosed, IPlug, IPump, ITv, IWasher } from "./Icons";
+import { IAc, IFan, IFridge, IGeneric, IHeater, IHood, IKettle, ILight, ILockClosed, IPlug, IPump, ITv, IVent, IWasher } from "./Icons";
 
 const MAP: Record<DeviceIconName, ComponentType<{ size?: number }>> = {
   fan: IFan,
@@ -14,6 +14,9 @@ const MAP: Record<DeviceIconName, ComponentType<{ size?: number }>> = {
   pump: IPump,
   plug: IPlug,
   generic: IGeneric,
+  hood: IHood,
+  vent: IVent,
+  kettle: IKettle,
 };
 
 /** Any unknown icon name falls back to the generic power symbol, so new device kinds never break the UI. */

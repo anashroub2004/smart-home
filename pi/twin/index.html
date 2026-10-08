@@ -289,6 +289,19 @@ function iconSvg(d, x, y) {
   if (d.icon === "tv") {
     return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#17233A" : "#1F2227"}"/><rect x="-10" y="-7" width="20" height="13" rx="2" fill="${on ? c : "none"}" stroke="${on ? c : "#555B63"}" stroke-width="2"/></g>`;
   }
+  if (d.icon === "hood") {
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#1E2A3F" : "#1F2227"}"/><path d="M-4 -9h8v5l6 7h-20l6-7z" fill="none" stroke="${on ? "var(--accent)" : "#555B63"}" stroke-width="2"/>${on ? `<path d="M-6 7v3M0 7v4M6 7v3" stroke="var(--accent)" stroke-width="2" class="pulse"/>` : ""}</g>`;
+  }
+  if (d.icon === "vent") {
+    const spd = on ? "0.6s" : "0s";
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#123330" : "#1F2227"}"/><rect x="-11" y="-11" width="22" height="22" rx="4" fill="none" stroke="${on ? "var(--fan)" : "#555B63"}" stroke-width="1.6"/><g class="${on ? "spin" : ""}" style="--spd:${spd}">${[0, 90, 180, 270].map((a) => `<ellipse rx="2.6" ry="6" cy="-5" fill="${on ? "var(--fan)" : "#555B63"}" transform="rotate(${a})"/>`).join("")}</g></g>`;
+  }
+  if (d.icon === "kettle") {
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#3A1F12" : "#1F2227"}"/><path d="M-7 8h14l-2-11h-10z" fill="${on ? "#F97316" : "none"}" stroke="${on ? "#F97316" : "#555B63"}" stroke-width="2"/><path d="M-3 -6a3 3 0 0 1 6 0" fill="none" stroke="${on ? "#F97316" : "#555B63"}" stroke-width="2"/>${on ? `<path d="M-3 -10q2 -3 0 -6M3 -10q2 -3 0 -6" stroke="#E5E7EB" stroke-width="1.5" fill="none" class="pulse"/>` : ""}</g>`;
+  }
+  if (d.icon === "fridge") {
+    return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#17233A" : "#1F2227"}"/><rect x="-7" y="-11" width="14" height="22" rx="3" fill="none" stroke="${on ? "var(--accent)" : "#555B63"}" stroke-width="2"/><path d="M-7 -2h14M-3 -7v2M-3 2v3" stroke="${on ? "var(--accent)" : "#555B63"}" stroke-width="2"/></g>`;
+  }
   if (d.icon === "lock") {
     return `<g transform="translate(${x},${y})"><circle r="17" fill="${on ? "#13261B" : "#1F2227"}"/><rect x="-7" y="-2" width="14" height="10" rx="2" fill="none" stroke="${on ? "var(--good)" : "#9BA1AA"}" stroke-width="2"/><path d="M-4 -2v-4a4 4 0 0 1 8 0${on ? "" : "v4"}" fill="none" stroke="${on ? "var(--good)" : "#9BA1AA"}" stroke-width="2"/></g>`;
   }
@@ -320,10 +333,11 @@ function drawPlan() {
     const since = (ai.vacant_rooms || {})[rid], resting = (ai.resting || {})[rid];
     out.push(`<text x="${b.x + 16}" y="${b.y + 68}" class="room-sub num" style="fill:${since ? "var(--warn)" : "var(--person)"}">${since ? `empty ${mmss(now - since)} (radar + PIR)` : resting ? `resting ${mmss(now - resting)} (radar yes, no movement)` : ""}</text></g>`);
     (byRoom[rid] || []).forEach(([id, d], i) => {
-      const cols = Math.max(1, Math.floor((b.w - 20) / 170)), cx = b.x + 34 + (i % cols) * 170, cy = b.y + b.h - 44 - Math.floor(i / cols) * 62;
+      const colW = b.w < 400 ? 135 : 170;
+      const cols = Math.max(1, Math.floor((b.w - 20) / colW)), cx = b.x + 34 + (i % cols) * colW, cy = b.y + b.h - 44 - Math.floor(i / cols) * 58;
       const pend = (ai.pending || {})[id], guard = (ai.guards || {})[id], off = (ai.smart_off || {})[id], paused = (ai.paused || {})[id];
       const press = d.write && d.button;
-      out.push(`<g class="${press ? "clickable" : ""}"${press ? " " + cmd({action: "press", device: id}) : ""}><rect x="${cx - 26}" y="${cy - 26}" width="160" height="60" rx="10" fill="transparent"/>`);
+      out.push(`<g class="${press ? "clickable" : ""}"${press ? " " + cmd({action: "press", device: id}) : ""}><rect x="${cx - 26}" y="${cy - 26}" width="${colW - 10}" height="56" rx="10" fill="transparent"/>`);
       out.push(`<circle cx="${cx}" cy="${cy}" r="23" fill="none" stroke="${guard ? "var(--warn)" : "var(--accent)"}" stroke-width="${guard ? 2.5 : 2}" stroke-dasharray="${guard ? "none" : "4 4"}" opacity="${pend || guard ? 1 : 0}"/>`);
       out.push(iconSvg(d, cx, cy));
       out.push(`<text x="${cx + 26}" y="${cy - 3}" class="devlabel">${esc(d.label.replace(r.name + " ", ""))}</text>`);
@@ -437,6 +451,8 @@ function panelAI() {
 }
 function panelControl() {
   const p = S.person, o = [];
+  const td = S.today;
+  if (td) o.push(`<div class="card" style="margin-bottom:12px"><h3>Today</h3><div class="small"><b>${esc(td.period)}</b>${td.tags.length ? " · " + td.tags.map(esc).join(" · ") : ""}</div>${td.plans.length ? `<div class="muted small">${td.plans.map(esc).join(" · ")}</div>` : ""}<div class="hint">${esc(td.persona)} — the same days the AI's history was generated from (ai/personas/).</div></div>`);
   o.push(`<div class="card"><h3>The person</h3><div class="small">${p.manual ? "<b style='color:var(--warn)'>You are in control</b>" : "Following the routine"} · now: <b>${esc(p.activity)}</b> in <b>${esc((S.rooms[p.room] || {}).name || p.room)}</b></div><div class="grid2" style="margin-top:10px">${Object.entries(S.rooms).map(([rid, r]) => `<button class="btn${p.room === rid ? " pri" : ""}" ${cmd({action: "move", room: rid})}>${esc(r.name)}</button>`).join("")}<button class="btn" ${cmd({action: "move", room: "out"})}>Leave home</button><button class="btn pri" ${cmd({action: "routine"})}>Back to routine</button></div><div style="margin-top:10px" class="small">Movement: <span class="seg"><button class="${p.force_still == null ? "on" : ""}" ${cmd({action: "still", on: null})}>Routine</button><button class="${p.force_still === true ? "on" : ""}" ${cmd({action: "still", on: true})}>Sitting still</button><button class="${p.force_still === false ? "on" : ""}" ${cmd({action: "still", on: false})}>Moving</button></span></div><div class="hint">Sitting still: the PIR sees nothing but the radar still sees him — the AI must not switch anything off.</div></div>`);
   o.push(`<div class="card" style="margin-top:12px"><h3>Weather</h3><div class="small">Outside temperature <b class="num">${S.temp_delta >= 0 ? "+" : ""}${S.temp_delta}°C</b> vs normal</div><input type="range" min="-6" max="8" step="1" value="${S.temp_delta}" style="width:100%" data-change="temp"></div>`);
   const faults = [["", "Normal"], ["high", "Motor blocked (2× power)"], ["dead", "Burnt (no power)"], ["standby", "Stuck relay (power when off)"]];

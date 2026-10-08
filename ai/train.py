@@ -1,7 +1,7 @@
 """Nightly training (cron 03:00 on the Pi).
 
 For every AI device (from /config):
-  1. last 8 weeks of 15-minute slots (Away / vacation slots removed, AI mistakes counted as OFF)
+  1. last 16 weeks of 15-minute slots (Away / vacation slots removed, AI mistakes counted as OFF)
   2. chronological split: the last 14 days are the test set — never a random split
   3. sample weights = time decay (half-life 14 days) x energy cost (mistakes on power-hungry devices cost more)
   4. metrics: F1, precision, recall, exact change time, change within ±15 min, baseline "same as yesterday",

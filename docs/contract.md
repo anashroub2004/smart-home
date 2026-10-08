@@ -82,12 +82,17 @@
 | `hw.out` | `relay` · `pwm` · `ir` · `servo` · `none` | كيف تشغّله العقدة |
 | `hw.pin` / `hw.button` / `hw.ina` | | طرف الخرج / زر الحائط / عنوان INA226 |
 | `hw.on_above_w` | رقم | للمراقبة: يعتبر "يعمل" فوق هذه القدرة |
-| `icon` | `fan` `light` `washer` `lock` `tv` `fridge` `ac` `heater` `pump` `plug` `generic` | الشكل فقط — أي قيمة جديدة تظهر بأيقونة عامة |
+| `icon` | `fan` `light` `washer` `lock` `tv` `fridge` `ac` `heater` `pump` `plug` `generic` `hood` `vent` `kettle` | الشكل فقط — أي قيمة جديدة تظهر بأيقونة عامة (`hood`/`vent`/`kettle` أُضيفت 2026-10-10) |
 | `ai` (اختياري) | `{act, lead_min, off_after_min, grace_min, temp_on}` | تعديل سلوك الـ AI لهذا الجهاز. كل قيمة لها افتراضي (انظر أدناه) |
 
 **الذكاء الاصطناعي:** كل جهاز `power: write` + `control.ai: true` يحصل على نموذج خاص تلقائياً.
 الأجهزة `power: read` في نفس الغرفة تدخل كمعلومات إضافية (مثلاً: التلفاز يعمل ← هناك شخص).
-نوع الجهاز للـ AI يُستنتج: `light` (icon light أو `on_when_dark`) · `thermal` (fan/ac/heater أو `follow_temp`) · `generic`.
+نوع الجهاز للـ AI يُستنتج: `light` (icon light أو `on_when_dark`) · `thermal` (fan/ac/heater أو `follow_temp`) · `generic` (مثل `hood` و `vent`: بوابته = وجود شخص في الغرفة).
+
+**الغرفة:**
+- **`windowless: true`** (اختياري، 2026-10-10): غرفة بلا ضوء نهار مثل الحمام، فهي "مظلمة" دائماً لقاعدة `on_when_dark` وللـ AI.
+- **غرفة بلا BH1750** (مثل المطبخ المفتوح على الصالة): تأخذ إضاءة أول غرفة فيها حساس، بعد طرح ضوء مصابيحها.
+- **`hum`** في `sensors`: الرطوبة (SHT31). تُستخدم كخاصية للـ AI (شفّاط الحمام) وتُسجَّل في SQLite كـ `<room>/hum`.
 
 | إعداد `ai` | الافتراضي |
 |---|---|

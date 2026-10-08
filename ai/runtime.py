@@ -50,8 +50,9 @@ def iso(ts):
 
 
 class AIRuntime:
-    def __init__(self, config, con, sink, model_dir=None, speed=1, record=False, clock=time.time):
+    def __init__(self, config, con, sink, model_dir=None, speed=1, record=False, clock=time.time, persona=None):
         self.con, self.sink, self.speed, self.clock = con, sink, max(1, speed), clock
+        self.persona = persona    # routine file for a brand-new hub's simulated history (ai/lifesim.py), or None
         self.model_dir = model_dir or S.MODEL_DIR
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.recorder = store.Recorder(con) if record else None
@@ -181,8 +182,12 @@ class AIRuntime:
         now = now or self.clock()
         if self.con.execute("SELECT COUNT(*) FROM readings").fetchone()[0] == 0:   # never wipe real readings
             if not quiet:
-                print("AI: empty history — generating 10 weeks of simulated history (labelled 'simulated')")
-            synth.fill(self.con, self.config, days=S.WINDOW_DAYS + 14, end_ts=now - 300, replace=False)
+                print(f"AI: empty history — generating {(S.WINDOW_DAYS + 14) // 7} weeks of simulated history (labelled 'simulated')")
+            if self.persona is not None:              # the person from the routine file (same as the digital twin)
+                from . import lifesim
+                lifesim.fill(self.con, self.config, self.persona, days=S.WINDOW_DAYS + 14, end_ts=now)
+            else:
+                synth.fill(self.con, self.config, days=S.WINDOW_DAYS + 14, end_ts=now - 300, replace=False)
         trained = self.report.get("trained_at", 0) / 1000
         devices_changed = set(self.report.get("devices", {})) != set(self.specs)
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")
@@ -817,7 +822,7 @@ class AIRuntime:
     def record(self, house, now):
         vals = {}
         for rid, r in (house.get("rooms") or {}).items():
-            for k in ("temp", "lux", "occ", "mmwave", "pir"):
+            for k in ("temp", "hum", "lux", "occ", "mmwave", "pir"):
                 if r.get(k) is not None:
                     vals[f"{rid}/{k}"] = r[k]
         for dev, st in (house.get("devices") or {}).items():

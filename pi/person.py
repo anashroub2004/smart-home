@@ -1,8 +1,9 @@
 """The simulated person who lives in the house (digital twin).
 
-Follows the daily routine from ai/routine.py — the same routine the AI's simulated history was built from —
-so the model and the live simulator agree. You can take over from the twin page (move him, keep him still,
-send him out) and give the routine back later.
+Lives the days of a routine file (ai/personas/*.toml, via ai/persona.py) — the same days the AI's simulated
+history was generated from (ai/lifesim.py) — so the model and the live simulator agree. Without a routine file
+he follows the older fixed routine (ai/routine.py). You can take over from the twin page (move him, keep him
+still, send him out) and give the routine back later.
 
 Python standard library only.
 """
@@ -15,8 +16,9 @@ OUT = routine.OUT
 
 
 class Person:
-    def __init__(self, config, seed=42):
+    def __init__(self, config, seed=42, persona=None):
         self.seed = seed
+        self.persona = persona        # ai.persona.Persona, or None for the old fixed routine
         self.rng = random.Random(seed)
         self.rooms = tuple(r for r in config["rooms"])
         self.room = None
@@ -30,6 +32,7 @@ class Person:
         self.habits = True            # switches lights off when leaving (sometimes forgets)
         self._segs_day = None
         self._segs = []
+        self.day_plan = None
 
     def set_config(self, config):
         self.rooms = tuple(r for r in config["rooms"])
@@ -38,9 +41,21 @@ class Person:
     def segments(self, ts):
         day = datetime.fromtimestamp(ts).date()
         if day != self._segs_day:
-            self._segs = routine.segments(day, self.seed, self.changed_from, self.rooms)
+            if self.persona is not None:
+                self.day_plan = self.persona.day(day)
+                has = set(self.rooms)
+                fix = lambda r: r if r in has or r == OUT else ("living" if "living" in has else sorted(has)[0])
+                self._segs = [(a, b, fix(room), act, still) for a, b, room, act, still in self.day_plan.segments]
+            else:
+                self.day_plan = None
+                self._segs = routine.segments(day, self.seed, self.changed_from, self.rooms)
             self._segs_day = day
         return self._segs
+
+    def plan(self, ts):
+        """Today's plan from the routine file (appliance use, unusual-day tags), or None."""
+        self.segments(ts)
+        return self.day_plan
 
     def plan_now(self, ts):
         dt = datetime.fromtimestamp(ts)

@@ -3,7 +3,7 @@
 Table `readings(ts INTEGER unix seconds, key TEXT, value REAL)` — written by the MQTT ingest service on the Pi
 (and by the simulator). Keys:
 
-    <room>/temp  <room>/lux  <room>/occ      SHT31, BH1750, fused presence (0/1)
+    <room>/temp  <room>/hum  <room>/lux  <room>/occ   SHT31, BH1750, fused presence (0/1)
     <room>/mmwave  <room>/pir                 each presence sensor separately (0/1), for vacancy confirmation
     device/<id>                               device state 0/1 (monitor-only devices: from the current they draw)
     level/<id>                                level / speed (e.g. 40, 70, 100)
@@ -73,7 +73,7 @@ class Recorder:
     """Writes readings the way the ingest service should: on change, plus a heartbeat every 15 min,
     and analogue values (temp, lux, power) only when they move enough."""
 
-    STEP = {"temp": 0.3, "lux": 25, "power": 0.15}
+    STEP = {"temp": 0.3, "hum": 2.0, "lux": 25, "power": 0.15}
 
     def __init__(self, con, heartbeat_s=900):
         self.con, self.heartbeat_s = con, heartbeat_s

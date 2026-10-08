@@ -2,7 +2,8 @@
 
 /** Icon / visual family. Free to extend — the UI falls back to a generic icon. */
 export type DeviceIconName =
-  | "fan" | "light" | "washer" | "lock" | "tv" | "fridge" | "ac" | "heater" | "pump" | "plug" | "generic";
+  | "fan" | "light" | "washer" | "lock" | "tv" | "fridge" | "ac" | "heater" | "pump" | "plug" | "generic"
+  | "hood" | "vent" | "kettle";
 
 /**
  * What a device CAN do. Every device has at least `power` (control or read) and `energy`.
@@ -79,6 +80,7 @@ export interface RoomConfig {
   hidden?: boolean; // not shown as a room on Home (e.g. the entrance / door)
   sensors?: string[]; // live values: temp, hum, lux, occ
   hardware?: string[]; // sensor modules, for the room screen
+  windowless?: boolean; // no daylight (e.g. a bathroom): lights are needed whenever someone is there
   devices?: Record<string, DeviceConfig>;
 }
 

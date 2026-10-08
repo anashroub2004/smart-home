@@ -36,7 +36,8 @@ COLS = [("manual_fix", "Manual fixes"), ("asked", "Asked"), ("yes", "Yes"), ("no
 
 def args_for(no_ai):
     return Namespace(fast=False, offline=None, fail_rate=0.0, lockout=False, reset=False, cloud=None, owner_uid=None,
-                     fault=None, no_ai=no_ai, speed=0, twin_only=True, twin_port=0, no_twin=True, auto_answer=True)
+                     fault=None, no_ai=no_ai, speed=0, twin_only=True, twin_port=0, no_twin=True, auto_answer=True,
+                     persona="default")
 
 
 def svg_chart(rows, title):

@@ -66,6 +66,18 @@ export const TEMPLATES: DeviceTemplate[] = [
     caps: { power: "read", energy: "ina" }, control: NONE, rules: {}, out: "none", watts: 3,
   },
   {
+    id: "hood", label: "Kitchen hood", icon: "hood", hint: "Relay. The AI learns when you cook and starts it for you.",
+    caps: { power: "write", energy: "ina" }, control: ALL, rules: { off_when_empty: true }, out: "relay", watts: 2,
+  },
+  {
+    id: "vent", label: "Exhaust fan", icon: "vent", hint: "Relay. Runs after a shower; a humidity sensor helps the AI.",
+    caps: { power: "write", energy: "ina" }, control: ALL, rules: { off_when_empty: true }, out: "relay", watts: 1.5,
+  },
+  {
+    id: "kettle", label: "Kettle", icon: "kettle", hint: "Monitor only: when you make tea or coffee (from its current).",
+    caps: { power: "read", energy: "ina" }, control: NONE, rules: {}, out: "none", watts: 4,
+  },
+  {
     id: "fridge", label: "Fridge", icon: "fridge", hint: "Monitor only. Alerts you if it stops.",
     caps: { power: "read", energy: "ina" }, control: NONE, rules: { alert_if_off_min: 10 }, out: "none", watts: 2,
   },

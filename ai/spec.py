@@ -51,6 +51,7 @@ class DeviceSpec:
     occ: str | None
     temp: str | None
     lux: str | None
+    hum: str | None = None              # humidity in its own room (bathroom exhaust fan, kitchen hood)
     presence_keys: list = field(default_factory=list)   # mmwave / pir keys of the room (vacancy confirmation)
     context: list = field(default_factory=list)          # monitor-only devices in the same room
     lead_min: int = 0
@@ -100,7 +101,10 @@ def ai_devices(config):
                 occ=f"{rid}/occ" if "occ" in sensors else None,
                 # a room without its own sensor borrows the nearest one we have
                 temp=f"{rid}/temp" if "temp" in sensors else (f"{climate[0]}/temp" if climate else None),
-                lux=f"{rid}/lux" if "lux" in sensors else (f"{bright[0]}/lux" if bright else None),
+                # a windowless room (bathroom) is always dark: no light reading to borrow
+                lux=None if room.get("windowless") else (
+                    f"{rid}/lux" if "lux" in sensors else (f"{bright[0]}/lux" if bright else None)),
+                hum=f"{rid}/hum" if "hum" in sensors else None,
                 presence_keys=room_presence_keys(rid, room),
                 context=context,
                 lead_min=int(num(ai.get("lead_min"), S.LEAD_MIN_THERMAL if kind == "thermal" else 0)),

@@ -5,7 +5,7 @@ Modules:
     spec       which devices the AI handles, built from /config (never hard-coded)
     store      SQLite readings on the Pi (raw data never leaves the house)
     features   15-minute slots -> feature table for one device
-    train      nightly training: 8-week window, time-decay + energy-cost weights, evaluation, explanations
+    train      nightly training: 16-week window, time-decay + energy-cost weights, evaluation, explanations
     presence   "will someone be home in 60 min?" model
     anomaly    energy fault detection from INA226 readings
     drift      routine-change detection

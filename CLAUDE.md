@@ -18,10 +18,12 @@
 - `/events` is written by the Pi only. The web writes only `/commands`, `/ai_pause`, `/prefs`, `/suggestions/{id}`, `/alerts/{id}/ack`, `/config`.
 - `pi/` uses the Python standard library for the simulator; `sim_house.py` must behave like the real Pi services.
 - AI: package `ai/` (see ai/README_AR.md + the smart-home-ai-model skill). HistGradientBoosting per device, 60 min horizon,
-  predict -> sensor gate -> waste guard -> smart off; energy-scaled + adaptive thresholds; 8-week window.
+  predict -> sensor gate -> waste guard -> smart off; energy-scaled + adaptive thresholds; 16-week window, half-life 28 days.
   `ai.runtime.AIRuntime` is used by the simulator and (later) the Pi automation service. Tests: `python -m unittest discover -s ai/tests -t .`
 - Digital twin: `python pi/sim_house.py --twin-only --speed 60` -> http://localhost:8765 (pi/twin/). The person follows
-  `ai/routine.py` (the same routine the AI trains on). Scenarios in pi/scenarios.py must all PASS before AI/rule changes ship.
+  the routine file below (the same days the AI trains on). Scenarios in pi/scenarios.py must all PASS before AI/rule changes ship.
+- The simulated person lives `ai/personas/student_studio.toml` (ai/persona.py): the twin AND the AI's history
+  (ai/lifesim.py, `python -m ai.lifesim --days 365`). Walk-forward evaluation: `python -m ai.experiment_year` -> ai/reports/.
 - Goal: the house completes the user's tasks; manual control is the exception. Learned habits (ai/habits.py) decide
   "now" questions; the trust ladder (ai/trust.py) asks first, then acts. `python pi/learning_curve.py` (28 days, AI vs --no-ai)
   is the evidence for the report.

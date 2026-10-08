@@ -134,6 +134,22 @@ def backfill_energy(w, config):
         w.write_energy_day(day, per)
 
 
+WINDOW = {"living": 0.75, "kitchen": 0.5, "bedroom": 0.6, "bathroom": 0.0}   # share of daylight per room
+
+
+def load_persona(args):
+    """The routine file the simulated person lives (ai/personas/*.toml) — standard library only."""
+    choice = getattr(args, "persona", "default") or "default"
+    if str(choice).lower() == "none":
+        return None
+    try:
+        from ai.persona import Persona
+        return Persona.load(None if choice == "default" else choice)
+    except Exception as e:  # noqa: BLE001 — fall back to the older fixed routine
+        print(f"! routine file not loaded ({type(e).__name__}: {e}) — using the old fixed routine")
+        return None
+
+
 def load_ai(args):
     """The real AI (ai/). Returns (AIRuntime class, sink class, store module) or None if it can't run here."""
     if args.no_ai:
@@ -182,7 +198,9 @@ class House:
         self.faults = dict(f.split(":", 1) if ":" in f else (f, "high") for f in (args.fault or []))
         self.ai = None                   # ai.runtime.AIRuntime (the real model) — set by start_ai()
         self.next_train = 0
-        self.person = Person(config)
+        self.persona = load_persona(args)  # the routine file the person lives (and the AI's history comes from)
+        self.person = Person(config, persona=self.persona)
+        self.intents_done = set()        # (date, n, "on"/"off") appliance uses from today's plan already done
         self.temp_delta = 0.0            # twin control: hotter / cooler day
         self.recent = deque(maxlen=80)   # latest events for the twin page
         self.changes = deque(maxlen=4000)  # (ts, kind, id, value) today: device on/off + person room, for the timeline
@@ -309,8 +327,16 @@ class House:
         sens_dt = min(60.0, max(1.0, t - (self.sensor_t or t - 5)))   # seconds since the last reading
         self.sensor_t = t
         h = now.hour + now.minute / 60
-        outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi) + self.temp_delta
-        daylight = max(0.0, math.sin((h - 6) / 13 * math.pi)) if 6 <= h <= 19 else 0
+        today = now.date()
+        if self.persona is not None:          # seasons, sunset and weather of the routine file (= the AI's history)
+            outdoor = self.persona.outdoor(today, h) + self.temp_delta
+            sun_lux = self.persona.daylight(today, h)
+            rh_out = self.persona.rh_out(today, h)
+        else:
+            outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi) + self.temp_delta
+            sun_lux = 600 * (max(0.0, math.sin((h - 6) / 13 * math.pi)) if 6 <= h <= 19 else 0)
+            rh_out = None
+        act, here = self.person.activity, self.person.room
         for rid, room in self.config["rooms"].items():
             if room["node"] in self.offline:
                 continue
@@ -335,14 +361,34 @@ class House:
                     rate = PIR_RATE * (1 - self.person.still) ** 2
                     s["pir"] = int(bool(new) and random.random() < 1 - math.exp(-rate * sens_dt / 60))
             devs = room.get("devices") or {}
+            fan_on = any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs)
+            if self.persona is not None:      # inertia like the real room (and like ai/lifesim.py)
+                target = self.persona.indoor_target(today, h, rid) - (1.4 if fan_on else 0)
+                if rid == "kitchen" and here == rid and act.startswith("Cooking"):
+                    target += 2.5
+                if rid == "bathroom" and here == rid and act == "Shower":
+                    target += 3.0
+                k = 1 - math.exp(-sens_dt / 7200)
+                s["_t"] = s.get("_t", target) + (target - s.get("_t", target)) * k
+                base_h = rh_out * 0.75 + 8
+                vent = rid == "bathroom" and any(self.devices[d]["v"] and self.icon(d) == "vent" for d in devs)
+                goal, rate = ((93, 0.18) if rid == "bathroom" and here == rid and act == "Shower"
+                              else (base_h, 0.09 if vent else 0.025))
+                s["_h"] = s.get("_h", base_h) + (goal - s.get("_h", base_h)) * (1 - (1 - rate) ** (sens_dt / 60))
             if "temp" in sensors:
-                fan_cool = -1.2 if any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs) else 0
-                s["temp"] = round(outdoor + (0.8 if rid == "bedroom" else 0) + fan_cool + random.gauss(0, 0.12), 1)
+                if self.persona is not None:
+                    # the twin's "hotter / cooler" control (and the scenarios) act at once, outside the room's inertia
+                    s["temp"] = round(s["_t"] + self.temp_delta + random.gauss(0, 0.08), 1)
+                else:
+                    s["temp"] = round(outdoor + (0.8 if rid == "bedroom" else 0) + (-1.2 if fan_on else 0)
+                                      + random.gauss(0, 0.12), 1)
             if "hum" in sensors:
-                s["hum"] = round(50 - (outdoor - 27) * 1.5 + random.gauss(0, 1))
+                s["hum"] = round(s["_h"] + random.gauss(0, 0.6)) if self.persona is not None else \
+                    round(50 - (outdoor - 27) * 1.5 + random.gauss(0, 1))
             if "lux" in sensors:
                 lights = 250 if any(self.devices[d]["v"] and self.icon(d) == "light" for d in devs) else 0
-                s["lux"] = round(max(0, 600 * daylight + lights + random.gauss(0, 6)))
+                share = 0.0 if room.get("windowless") else WINDOW.get(rid, 0.6)
+                s["lux"] = round(max(0, sun_lux * share + lights + random.gauss(0, 6)))
 
     def update_power(self, dt):
         total = BASE_W
@@ -604,7 +650,8 @@ class House:
                                       f"{room['name']} · empty for {empty_min} min · saved {saved} Wh", "energy")
                 elif self.paused(dev) or not s.get("occ"):
                     continue
-                elif r.get("on_when_dark") and not st["v"] and s.get("lux", 999) < th["light_on_lux"] \
+                elif r.get("on_when_dark") and not st["v"] and (self.room_lux(rid) if self.room_lux(rid) is not None
+                                                                 else 999) < th["light_on_lux"] \
                         and (s.get("entry_pending") or t - s.get("occ_since", 0) / 1000 < 90) \
                         and not (self.ai and self.ai_safe(self.ai.handles_entry, dev)):
                     # fallback only: when the AI is ready for this light it decides from your habits
@@ -641,6 +688,11 @@ class House:
                        (1 if random.random() < 0.01 * self.speedup else 0)
             elif icon == "tv":       # on while the person is watching TV in this room
                 want = 1 if occ and "TV" in self.person.activity else 0
+            elif icon == "kettle":   # boiling when today's plan says tea / coffee
+                plan = self.person.plan(CLOCK.now()) if self.persona is not None else None
+                hh = vnow().hour + vnow().minute / 60
+                want = int(bool(plan) and any(i["role"] == "kettle" and i["on"] <= hh < max(i["off"], i["on"] + 0.05)
+                                              for i in plan.intents))
             else:
                 want = 1 - st["v"] if random.random() < 0.002 * self.speedup else st["v"]
             if want != st["v"]:
@@ -679,7 +731,7 @@ class House:
         sink = FirebaseSink(self.w, room_of=lambda d: self.dev_room.get(d),
                             room_name=lambda r: self.config["rooms"].get(r, {}).get("name", r))
         self.ai = AIRuntime(self.config, con, sink, model_dir=ROOT / "ai" / "models" / name,
-                            speed=self.speedup, record=True, clock=CLOCK.now)
+                            speed=self.speedup, record=True, clock=CLOCK.now, persona=self.persona)
         ai_store.set_meta(con, "all_simulated", "1")    # every reading here is simulated — say so in the metrics
         self.clean_suggestions(keep_open=False)        # open ones from an earlier run can't be tracked
         t0 = time.time()
@@ -826,6 +878,7 @@ class House:
         moved = self.person.step(CLOCK.now())
         self.dark_habit()
         self.bed_habit()
+        self.appliance_tick()
         if not moved:
             return
         old, new = moved
@@ -891,6 +944,13 @@ class House:
     # ------------------------------------------------ learning curve (per day) + simulated answers
     KPI_AI = ("suggested", "accepted", "dismissed", "expired", "ai_on", "ai_entry_on", "ai_entry_skip", "smart_off",
               "ai_auto_off", "ai_trusted", "ai_undone", "trust_up", "trust_down")
+
+    def today_view(self):
+        plan = self.person.plan(CLOCK.now()) if self.persona is not None else None
+        if plan is None:
+            return None
+        return {"period": plan.period, "kind": plan.kind, "tags": [t for t in plan.tags if t != plan.kind],
+                "plans": plan.note, "persona": self.persona.d.get("person", {}).get("name", "")}
 
     def kpi_day(self):
         day = vnow().strftime("%Y-%m-%d")
@@ -971,13 +1031,62 @@ class House:
                             group="ai", by_label=f"AI suggestion, approved by {by}", why="Yes to an AI suggestion",
                             short="Suggestion approved", confidence=s.get("confidence"), tags=["ai", "manual"])
 
+    def room_lux(self, rid):
+        """Light level for the rules / the person: own BH1750, else dark if windowless, else a neighbour's."""
+        room = self.config["rooms"].get(rid) or {}
+        own = (self.rooms.get(rid) or {}).get("lux")
+        if own is not None:
+            return own
+        if room.get("windowless"):
+            return 0
+        for r, rc in self.config["rooms"].items():
+            if "lux" in (rc.get("sensors") or []) and (self.rooms.get(r) or {}).get("lux") is not None:
+                return self.rooms[r]["lux"] - (250 if any(self.devices[d]["v"] and self.icon(d) == "light"
+                                                          for d in (rc.get("devices") or {})) else 0)
+        return None
+
+    def appliance_tick(self):
+        """Appliance use from today's plan in the routine file: hood while cooking, exhaust fan after a shower,
+        laundry, the app pre-cooling the living room on hot afternoons. Same plan the AI's history came from."""
+        plan = self.person.plan(CLOCK.now()) if self.persona is not None else None
+        if plan is None or self.person.manual or not self.person.habits:
+            return
+        now = vnow()
+        h = now.hour + now.minute / 60 + now.second / 3600
+        for n, i in enumerate(plan.intents):
+            role = i["role"]
+            if role.startswith("_") or role == "kettle":
+                continue
+            devs = [d for d in self.dev_cfg if self.icon(d) == role and self.writable(d)] if role != "fan" else \
+                [d for d in (self.config["rooms"].get(i.get("room", "living"), {}).get("devices") or {})
+                 if self.icon(d) == "fan" and self.writable(d)]
+            for edge, at, v in (("on", i["on"], 1), ("off", i.get("off"), 0)):
+                key = (plan.date, n, edge)
+                if at is None or key in self.intents_done or h < at or h > at + 0.5:
+                    continue
+                self.intents_done.add(key)
+                for dev in devs:
+                    if self.node_of(dev) in self.offline or self.devices[dev]["v"] == v:
+                        continue
+                    app = i.get("how") == "app"
+                    self.set_device(dev, v, self.mid_level(dev) if v else None, source="web" if app else "button",
+                                    src_label="App" if app else "Button", group="manual",
+                                    by_label="Owner (app)" if app else "Someone at home (button)",
+                                    short=("Started from the app before coming home" if app else
+                                           f"Wall button in the {self.room_name(self.dev_room[dev]).lower()}"),
+                                    why={"hood": "Cooking", "vent": "After a shower", "washer": "Laundry",
+                                         "fan": "Hot afternoon: pre-cooling"}.get(role, "Daily routine")
+                                    + (" (forgot to switch it off)" if (edge == "off" and i.get("forgot")) else ""),
+                                    tags=["manual"])
+        if len(self.intents_done) > 400:
+            self.intents_done = {k for k in self.intents_done if k[0] == plan.date}
+
     def dark_habit(self):
         """Like a real person: awake in a dark room with the light off, he presses the wall switch himself
         after a few minutes (only if the rules / AI did not). Not if he switched it off himself in this room."""
         rid, now = self.person.room, CLOCK.now()
         room = self.config["rooms"].get(rid) or {}
-        s = self.rooms.get(rid) or {}
-        lux = s.get("lux")
+        lux = self.room_lux(rid)
         if not self.person.habits or self.person.activity == "Sleeping" or lux is None or lux >= self.th["light_on_lux"] \
                 or room.get("node") in self.offline:
             self.dark_since.pop(rid, None)
@@ -1105,6 +1214,7 @@ class House:
             "ai": self.ai_safe(self.ai.twin_view, house, now) if self.ai else None,
             "scenarios": self.scenarios.view() if self.scenarios else None,
             "kpi": self.kpi_view()[-28:],
+            "today": self.today_view(),
             "sim_answers": self.sim_answers,
         }
         body = json.dumps(state, default=str).encode()
@@ -1244,6 +1354,8 @@ def main():
                     help="digital twin without Firebase (in memory): any speed, scenarios, no quota")
     ap.add_argument("--twin-port", type=int, default=8765, help="port of the digital twin page (default 8765)")
     ap.add_argument("--no-twin", action="store_true", help="don't start the digital twin page")
+    ap.add_argument("--persona", default="default", metavar="FILE",
+                    help="routine file the person lives (default ai/personas/student_studio.toml; 'none' = old routine)")
     ap.add_argument("--auto-answer", action="store_true",
                     help="the simulated person answers the AI's questions (default in --twin-only; with --cloud you answer in the app)")
     args = ap.parse_args()

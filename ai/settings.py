@@ -18,10 +18,11 @@ SLOTS_PER_DAY = 24 * 60 // SLOT_MIN      # 96
 HORIZON = 4                              # predict 4 slots = 60 minutes ahead (prediction horizon, NOT switch-on time)
 HORIZON_MIN = HORIZON * SLOT_MIN
 MIN_DAYS = 21                            # "learning" until 3 weeks of data
-WINDOW_DAYS = 56                         # sliding training window: last 8 weeks only
-HALF_LIFE_DAYS = 14                      # time-decay sample weights: a day 2 weeks old counts half
+WINDOW_DAYS = 112                        # sliding training window: last 16 weeks (a whole semester; chosen on
+                                         # held-out weeks of the simulated year: F1 0.41 -> 0.47 vs 8 weeks)
+HALF_LIFE_DAYS = 28                      # time-decay sample weights: a day 4 weeks old counts half
 TEST_DAYS = 14                           # chronological test split: the last 14 days
-RETENTION_DAYS = 70                      # raw readings older than this are deleted
+RETENTION_DAYS = 140                     # raw readings older than this are deleted (window + lags + margin)
 MODEL_PARAMS = dict(max_iter=300, learning_rate=0.05, class_weight="balanced", random_state=0)
 
 # ---- decision policy

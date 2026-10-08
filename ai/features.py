@@ -15,9 +15,10 @@ BINARY_SUFFIXES = ("/occ", "/mmwave", "/pir")
 GROUPS = {
     "time": ["h_sin", "h_cos", "dow", "weekend"],
     "habit": ["now", "lag1", "lag2", "yday", "lweek"],
-    "presence": ["occ", "occ_run", "occ_yday_target", "home_occ"],
+    "presence": ["occ", "occ_run", "occ_yday_target", "home_occ", "home_run", "away_run"],
     "temperature": ["temp"],
     "light": ["lux"],
+    "humidity": ["hum"],
 }
 CORE = ["now", "lag1", "lag2", "yday", "lweek"]
 
@@ -88,15 +89,20 @@ def device_state(slots, spec):
 def build_features(slots, spec):
     s = device_state(slots, spec)
     occ, temp = col(slots, spec.occ), col(slots, spec.temp)
+    home = home_occupancy(slots)
     idx = slots.index
     feats = time_features(idx)
     feats.update({
         "temp": temp, "lux": col(slots, spec.lux), "occ": occ,
+        "hum": col(slots, getattr(spec, "hum", None)),
         "now": s, "lag1": s.shift(1), "lag2": s.shift(2),
         "yday": s.shift(S.SLOTS_PER_DAY), "lweek": s.shift(7 * S.SLOTS_PER_DAY),
         "occ_yday_target": occ.shift(S.SLOTS_PER_DAY - S.HORIZON),
         "occ_run": run_length(occ),
-        "home_occ": home_occupancy(slots),
+        "home_occ": home,
+        # how long he has been home / out (slots): dinner comes ~X h after coming home, whatever the day's timetable
+        "home_run": run_length(home).where(home == 1, 0),
+        "away_run": run_length(home).where(home == 0, 0),
     })
     for c in spec.context:                         # e.g. "TV is on" -> someone is in the living room
         feats["ctx_" + c.split("/", 1)[1]] = col(slots, c)

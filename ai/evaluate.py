@@ -1,6 +1,6 @@
 """Experiments for the graduation report — run:  python -m ai.run evaluate
 
-1. Routine change (summer holiday in the last 14 days): does the 8-week window + time-decay weighting
+1. Routine change (summer holiday in the last 14 days): does the sliding window + time-decay weighting
    adapt faster than training on everything with equal weights?
 2. Energy-scaled thresholds for typical devices.
 Writes ai/models/evaluation.md (all numbers come from SIMULATED data — say so in the report).
@@ -20,8 +20,8 @@ from .train import change_accuracy, new_model, sample_weights
 
 def drift_experiment(config, seeds=(1, 2, 3), change_days=14, test_days=7, total_days=98):
     variants = {"all history, equal weights": (None, False),
-                "8-week window, equal weights": (S.WINDOW_DAYS, False),
-                "8-week window + time decay (ours)": (S.WINDOW_DAYS, True)}
+                f"{S.WINDOW_DAYS // 7}-week window, equal weights": (S.WINDOW_DAYS, False),
+                f"{S.WINDOW_DAYS // 7}-week window + time decay (ours)": (S.WINDOW_DAYS, True)}
     scores = {v: [] for v in variants}
     near = {v: [] for v in variants}
     for seed in seeds:

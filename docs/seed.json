@@ -1,7 +1,7 @@
 {
   "config": {
     "schema": 3,
-    "version": 1,
+    "version": 2,
     "home_name": "My Studio",
     "nodes": {
       "living": {
@@ -30,8 +30,9 @@
           35
         ],
         "i2c": [
+          "0x23",
           "0x44",
-          "0x23"
+          "0x45"
         ]
       },
       "door": {
@@ -233,22 +234,175 @@
           "occ"
         ],
         "hardware": [
-          "PIR"
+          "PIR",
+          "INA226"
         ],
-        "devices": {}
+        "devices": {
+          "kitchen_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 27,
+              "button": 14,
+              "ina": "0x42"
+            },
+            "watts": 1.2
+          },
+          "kitchen_hood": {
+            "name": "Hood",
+            "icon": "hood",
+            "template": "hood",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 13,
+              "button": 4,
+              "ina": "0x43"
+            },
+            "watts": 2.0
+          },
+          "fridge": {
+            "name": "Fridge",
+            "icon": "fridge",
+            "template": "fridge",
+            "caps": {
+              "power": "read",
+              "energy": "ina"
+            },
+            "control": {
+              "app": false,
+              "button": false,
+              "rules": false,
+              "ai": false
+            },
+            "rules": {
+              "alert_if_off_min": 60
+            },
+            "hw": {
+              "out": "none",
+              "ina": "0x46",
+              "on_above_w": 0.5
+            },
+            "watts": 2.0
+          },
+          "kettle": {
+            "name": "Kettle",
+            "icon": "kettle",
+            "template": "kettle",
+            "caps": {
+              "power": "read",
+              "energy": "ina"
+            },
+            "control": {
+              "app": false,
+              "button": false,
+              "rules": false,
+              "ai": false
+            },
+            "rules": {},
+            "hw": {
+              "out": "none",
+              "ina": "0x47",
+              "on_above_w": 1.0
+            },
+            "watts": 4.0
+          }
+        }
       },
       "bathroom": {
         "name": "Bathroom",
         "node": "bedroom",
         "order": 4,
         "sensors": [
-          "occ"
+          "occ",
+          "temp",
+          "hum"
         ],
         "hardware": [
           "PIR",
+          "SHT31 (0x45)",
           "INA226"
         ],
         "devices": {
+          "bathroom_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 13,
+              "button": 4,
+              "ina": "0x43"
+            },
+            "watts": 1.2
+          },
+          "bathroom_vent": {
+            "name": "Exhaust fan",
+            "icon": "vent",
+            "template": "vent",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 18,
+              "button": 19,
+              "ina": "0x46"
+            },
+            "watts": 1.5
+          },
           "washer": {
             "name": "Washer",
             "icon": "washer",
@@ -273,7 +427,8 @@
             },
             "watts": 3.6
           }
-        }
+        },
+        "windowless": true
       },
       "entrance": {
         "name": "Entrance",
