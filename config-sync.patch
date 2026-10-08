@@ -1,0 +1,736 @@
+From 18952951b22f1b5a44e769a82d17f6f83b576b70 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 13:04:54 +0300
+Subject: [PATCH] Sim: a newer seed adds new rooms/devices to /config; rebuild
+ stale simulated history
+
+- /config.seed = revision of docs/seed.json; when the file is newer, upgrade_config() ADDS rooms,
+  devices, sensors, i2c and nodes (no wipe, user edits kept, colliding pins skipped, version + 1)
+- the simulator's 100% simulated AI history is rebuilt when the routine file or device list changed
+- tests: ai/tests/test_config_upgrade.py
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0191oprBLjMoVumZMiiyaXc6
+---
+ CLAUDE.md                                 |   2 +
+ ai/tests/old_seed_v1.json                 | 368 ++++++++++++++++++++++
+ ai/tests/test_config_upgrade.py           |  52 +++
+ docs/PROJECT_CONTEXT.md                   |   3 +-
+ docs/contract.md                          |   4 +-
+ docs/seed.json                            |   1 +
+ docs/updates/2026-10-10_02_config-sync.md |  73 +++++
+ pi/sim_house.py                           |  88 ++++++
+ web/lib/contract.ts                       |   2 +
+ 9 files changed, 590 insertions(+), 3 deletions(-)
+ create mode 100644 ai/tests/old_seed_v1.json
+ create mode 100644 ai/tests/test_config_upgrade.py
+ create mode 100644 docs/updates/2026-10-10_02_config-sync.md
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 0f4d3f3..6ca3649 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -27,5 +27,7 @@
+ - Goal: the house completes the user's tasks; manual control is the exception. Learned habits (ai/habits.py) decide
+   "now" questions; the trust ladder (ai/trust.py) asks first, then acts. `python pi/learning_curve.py` (28 days, AI vs --no-ai)
+   is the evidence for the report.
++- Changing devices in `docs/seed.json`: bump its `seed` number — `pi/sim_house.py upgrade_config()` then ADDS the new rooms/devices
++  to an existing /config (no wipe). `--twin-only` never touches Firebase; use `--cloud` to see the twin in the app.
+ - Real Firebase project: `ai-home-aef50` (alias `prod` in .firebaserc; default stays the `demo-smart-home` emulator). See docs/DEPLOY.md.
+ - Timezone: Asia/Hebron. Timestamps in Firebase: ms since epoch (UTC).
+diff --git a/ai/tests/old_seed_v1.json b/ai/tests/old_seed_v1.json
+new file mode 100644
+index 0000000..0e8ab9f
+--- /dev/null
++++ b/ai/tests/old_seed_v1.json
+@@ -0,0 +1,368 @@
++{
++  "config": {
++    "schema": 3,
++    "version": 1,
++    "home_name": "My Studio",
++    "nodes": {
++      "living": {
++        "name": "Living room & kitchen node",
++        "reserved_pins": [
++          16,
++          17,
++          21,
++          22,
++          34,
++          35
++        ],
++        "i2c": [
++          "0x44",
++          "0x23"
++        ]
++      },
++      "bedroom": {
++        "name": "Bedroom & bathroom node",
++        "reserved_pins": [
++          16,
++          17,
++          21,
++          22,
++          34,
++          35
++        ],
++        "i2c": [
++          "0x44",
++          "0x23"
++        ]
++      },
++      "door": {
++        "name": "Front door node",
++        "reserved_pins": [
++          4,
++          5,
++          13,
++          14,
++          16,
++          17,
++          18,
++          19,
++          21,
++          23,
++          25,
++          26,
++          27,
++          32,
++          33
++        ],
++        "i2c": []
++      }
++    },
++    "rooms": {
++      "living": {
++        "name": "Living room",
++        "node": "living",
++        "order": 1,
++        "sensors": [
++          "temp",
++          "hum",
++          "lux",
++          "occ"
++        ],
++        "hardware": [
++          "C1001 mmWave",
++          "PIR",
++          "SHT31",
++          "BH1750",
++          "INA226"
++        ],
++        "devices": {
++          "living_fan": {
++            "name": "Fan",
++            "icon": "fan",
++            "template": "fan",
++            "caps": {
++              "power": "write",
++              "level": {
++                "steps": [
++                  40,
++                  70,
++                  100
++                ],
++                "labels": [
++                  "Low",
++                  "Medium",
++                  "High"
++                ]
++              },
++              "energy": "ina"
++            },
++            "control": {
++              "app": true,
++              "button": true,
++              "rules": true,
++              "ai": true
++            },
++            "rules": {
++              "off_when_empty": true,
++              "follow_temp": true
++            },
++            "hw": {
++              "out": "pwm",
++              "pin": 25,
++              "button": 32,
++              "ina": "0x40"
++            },
++            "watts": 2.4
++          },
++          "living_light": {
++            "name": "Lights",
++            "icon": "light",
++            "template": "light",
++            "caps": {
++              "power": "write",
++              "energy": "ina"
++            },
++            "control": {
++              "app": true,
++              "button": true,
++              "rules": true,
++              "ai": true
++            },
++            "rules": {
++              "off_when_empty": true,
++              "on_when_dark": true
++            },
++            "hw": {
++              "out": "relay",
++              "pin": 26,
++              "button": 33,
++              "ina": "0x41"
++            },
++            "watts": 1.2
++          }
++        }
++      },
++      "bedroom": {
++        "name": "Bedroom",
++        "node": "bedroom",
++        "order": 2,
++        "sensors": [
++          "temp",
++          "hum",
++          "lux",
++          "occ"
++        ],
++        "hardware": [
++          "C1001 mmWave",
++          "PIR",
++          "SHT31",
++          "BH1750",
++          "INA226"
++        ],
++        "devices": {
++          "bedroom_fan": {
++            "name": "Fan",
++            "icon": "fan",
++            "template": "fan",
++            "caps": {
++              "power": "write",
++              "level": {
++                "steps": [
++                  40,
++                  70,
++                  100
++                ],
++                "labels": [
++                  "Low",
++                  "Medium",
++                  "High"
++                ]
++              },
++              "energy": "ina"
++            },
++            "control": {
++              "app": true,
++              "button": true,
++              "rules": true,
++              "ai": true
++            },
++            "rules": {
++              "off_when_empty": true,
++              "follow_temp": true
++            },
++            "hw": {
++              "out": "pwm",
++              "pin": 25,
++              "button": 32,
++              "ina": "0x40"
++            },
++            "watts": 2.4
++          },
++          "bedroom_light": {
++            "name": "Lights",
++            "icon": "light",
++            "template": "light",
++            "caps": {
++              "power": "write",
++              "energy": "ina"
++            },
++            "control": {
++              "app": true,
++              "button": true,
++              "rules": true,
++              "ai": true
++            },
++            "rules": {
++              "off_when_empty": true,
++              "on_when_dark": true
++            },
++            "hw": {
++              "out": "relay",
++              "pin": 26,
++              "button": 33,
++              "ina": "0x41"
++            },
++            "watts": 1.2
++          }
++        }
++      },
++      "kitchen": {
++        "name": "Kitchen",
++        "node": "living",
++        "order": 3,
++        "sensors": [
++          "occ"
++        ],
++        "hardware": [
++          "PIR"
++        ],
++        "devices": {}
++      },
++      "bathroom": {
++        "name": "Bathroom",
++        "node": "bedroom",
++        "order": 4,
++        "sensors": [
++          "occ"
++        ],
++        "hardware": [
++          "PIR",
++          "INA226"
++        ],
++        "devices": {
++          "washer": {
++            "name": "Washer",
++            "icon": "washer",
++            "template": "washer",
++            "caps": {
++              "power": "write",
++              "status": true,
++              "energy": "ina"
++            },
++            "control": {
++              "app": true,
++              "button": true,
++              "rules": false,
++              "ai": false
++            },
++            "rules": {},
++            "hw": {
++              "out": "pwm",
++              "pin": 27,
++              "button": 14,
++              "ina": "0x42"
++            },
++            "watts": 3.6
++          }
++        }
++      },
++      "entrance": {
++        "name": "Entrance",
++        "node": "door",
++        "order": 5,
++        "hidden": true,
++        "sensors": [],
++        "hardware": [
++          "R503 fingerprint",
++          "4x4 keypad",
++          "MG996R servo",
++          "Outdoor PIR",
++          "Camera"
++        ],
++        "devices": {
++          "door_lock": {
++            "name": "Front door",
++            "icon": "lock",
++            "template": "lock",
++            "caps": {
++              "lock": {
++                "open_s": 5
++              },
++              "energy": "none"
++            },
++            "control": {
++              "app": true,
++              "button": false,
++              "rules": false,
++              "ai": false,
++              "confirm": true
++            },
++            "rules": {},
++            "hw": {
++              "out": "servo",
++              "pin": 18
++            },
++            "watts": 0
++          }
++        }
++      }
++    },
++    "thresholds": {
++      "fan_on_temp": 28,
++      "fan_off_temp": 26.5,
++      "light_on_lux": 150,
++      "empty_room_off_min": 10,
++      "ai_act_at": 0.8,
++      "ai_suggest_at": 0.6,
++      "override_pause_min": 120,
++      "door_lockout_attempts": 5,
++      "door_lockout_s": 60
++    },
++    "fingerprints": {
++      "1": "Owner",
++      "2": "Fares"
++    },
++    "scenes": {
++      "home": {
++        "name": "Home",
++        "order": 1,
++        "set": {
++          "living_light": 1
++        }
++      },
++      "away": {
++        "name": "Away",
++        "order": 2,
++        "set": {
++          "living_fan": 0,
++          "living_light": 0,
++          "bedroom_fan": 0,
++          "bedroom_light": 0,
++          "washer": 0
++        }
++      },
++      "sleep": {
++        "name": "Sleep",
++        "order": 3,
++        "set": {
++          "living_fan": 0,
++          "living_light": 0,
++          "bedroom_light": 0,
++          "bedroom_fan": {
++            "v": 1,
++            "level": 40
++          }
++        }
++      }
++    }
++  }
++}
+diff --git a/ai/tests/test_config_upgrade.py b/ai/tests/test_config_upgrade.py
+new file mode 100644
+index 0000000..14d47c8
+--- /dev/null
++++ b/ai/tests/test_config_upgrade.py
+@@ -0,0 +1,52 @@
++"""A newer docs/seed.json adds rooms/devices to an existing /config without wiping what the user changed."""
++import json
++import sys
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++sys.path.insert(0, str(ROOT / "pi"))
++
++import sim_house  # noqa: E402
++
++OLD = json.loads((Path(__file__).parent / "old_seed_v1.json").read_text(encoding="utf-8"))["config"]
++NEW = json.loads((ROOT / "docs" / "seed.json").read_text(encoding="utf-8"))["config"]
++
++
++class ConfigUpgrade(unittest.TestCase):
++    def old(self):
++        cfg = json.loads(json.dumps(OLD))
++        cfg["version"] = 7                                                  # edited in the app a few times
++        cfg["rooms"]["living"]["devices"]["living_light"]["name"] = "Ceiling"  # a user rename
++        return cfg
++
++    def test_adds_new_devices_keeps_user_changes(self):
++        new, added, skipped = sim_house.upgrade_config(self.old(), NEW)
++        for d in ("kitchen_light", "kitchen_hood", "fridge", "kettle", "bathroom_light", "bathroom_vent"):
++            self.assertIn(d, added)
++            self.assertTrue(any(d in (r.get("devices") or {}) for r in new["rooms"].values()))
++        self.assertEqual(skipped, [])
++        self.assertEqual(new["rooms"]["living"]["devices"]["living_light"]["name"], "Ceiling")
++        self.assertIn("washer", new["rooms"]["bathroom"]["devices"])
++        self.assertIn("hum", new["rooms"]["bathroom"]["sensors"])
++        self.assertTrue(new["rooms"]["bathroom"]["windowless"])
++        self.assertIn("0x45", new["nodes"]["bedroom"]["i2c"])
++        self.assertEqual(new["version"], 8)                                 # nodes download it
++        self.assertEqual(new["seed"], NEW["seed"])
++        self.assertIsNone(sim_house.upgrade_config(new, NEW))               # only once
++
++    def test_never_takes_a_pin_you_used(self):
++        cfg = self.old()
++        cfg["rooms"]["living"]["devices"]["my_lamp"] = {"name": "Lamp", "icon": "light",
++                                                        "hw": {"out": "relay", "pin": 27, "button": 33}}
++        new, added, skipped = sim_house.upgrade_config(cfg, NEW)
++        self.assertIn("kitchen_light", skipped)                             # it wanted pin 27
++        self.assertNotIn("kitchen_light", new["rooms"]["kitchen"]["devices"])
++        self.assertIn("my_lamp", new["rooms"]["living"]["devices"])
++
++    def test_current_seed_needs_nothing(self):
++        self.assertIsNone(sim_house.upgrade_config(json.loads(json.dumps(NEW)), NEW))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/docs/PROJECT_CONTEXT.md b/docs/PROJECT_CONTEXT.md
+index 3f9281f..4cba4ac 100644
+--- a/docs/PROJECT_CONTEXT.md
++++ b/docs/PROJECT_CONTEXT.md
+@@ -58,7 +58,8 @@
+ - **تطبيق ويب فقط** (لا تطبيق موبايل): Next.js 15 static export + Firebase Hosting + Firebase Auth. مستخدم واحد (owner). واجهة داكنة إنجليزية بخط Manrope.
+ - **عقد البيانات:** `docs/contract.md` هو المرجع الوحيد. الويب يعرف المسارات فقط من `web/lib/home.ts`.
+ - **نموذج القدرات (schema 3):** كل جهاز = `caps` (ماذا يستطيع: power write/read + energy كحد أدنى، و level/mode/status/lock اختيارياً) + `control` (app/button/rules/ai/confirm) + `rules` + `hw`. لا أنواع ثابتة في الكود. 10 قوالب + Custom في شاشة Add device، وAdd room. الدليل: `docs/ADDING_DEVICES.md`.
+-- **الأجهزة الحالية في المجسّم:** مروحتان (سرعة)، ضوءان، غسالة (app+button فقط)، الباب. التلفاز والثلاجة وغيرها **قوالب جاهزة فقط** لمن يطوّر المجسّم.
++- **الأجهزة الحالية في المجسّم:** مروحتان (سرعة)، ضوءا الصالة والنوم، ضوء وشفّاط المطبخ، ضوء وشفّاط الحمام، غسالة (app+button فقط)، ثلاجة وغلاية (مراقبة فقط)، الباب. التلفاز وغيره **قوالب جاهزة فقط**.
++- **تحديث الأجهزة:** عند تغيير `docs/seed.json` يُرفع رقم `seed`. عندها يضيف المحاكي/الـ Pi الجديد إلى `/config` الموجود بلا مسح (`upgrade_config`). `--twin-only` لا يكتب في Firebase؛ لرؤية التوأم في التطبيق استعمل `--cloud`.
+ - **سجل كامل `/events`** لكل عملية: من (يدوي/AI/قاعدة/باب/نظام)، لماذا، التغيير، النتيجة، زمن الاستجابة.
+ - **المحاكي `pi/sim_house.py`** يتصرف تماماً مثل الـ Pi ويكتب عبر `pi/firebase_writer.py` (نفس الملف الذي سيستخدمه الـ Pi).
+ - **تبديل مصدر البيانات على مراحل** (الويب لا يتغير):
+diff --git a/docs/contract.md b/docs/contract.md
+index 0cfe2eb..a842691 100644
+--- a/docs/contract.md
++++ b/docs/contract.md
+@@ -10,7 +10,7 @@
+ 
+ | المسار | من يكتب | الوصف |
+ |---|---|---|
+-| `/config` | الويب (owner) | الغرف والأجهزة والعتبات والمشاهد — مصدر رسم الواجهة. كل تعديل يزيد `version` |
++| `/config` | الويب (owner) | الغرف والأجهزة والعتبات والمشاهد — مصدر رسم الواجهة. كل تعديل يزيد `version`. `seed` = رقم نسخة `docs/seed.json` التي بُني منها؛ عندما يرتفع رقم الـ seed يُضيف الـ Pi/المحاكي الغرف والأجهزة الجديدة فقط (بلا مسح) |
+ | `/home_state` | Pi | الحالة الحية: الغرف، الأجهزة، الطاقة، الباب، المشهد الحالي |
+ | `/nodes/{node}` | Pi | `online`, `last_seen`, `config_version` (آخر نسخة config أكّدتها العقدة), `rssi` |
+ | `/commands/{device}` | الويب ← Pi | أمر واحد معلّق لكل جهاز |
+@@ -31,7 +31,7 @@
+ 
+ ```json
+ {
+-  "schema": 3, "version": 1, "home_name": "My Studio",
++  "schema": 3, "version": 1, "seed": 2, "home_name": "My Studio",
+   "nodes": { "living": { "name": "Living room & kitchen node", "reserved_pins": [16,17,21,22,34,35], "i2c": ["0x44","0x23"] } },
+   "rooms": {
+     "living": {
+diff --git a/docs/seed.json b/docs/seed.json
+index 0f26f03..d6b3d8a 100644
+--- a/docs/seed.json
++++ b/docs/seed.json
+@@ -2,6 +2,7 @@
+   "config": {
+     "schema": 3,
+     "version": 2,
++    "seed": 2,
+     "home_name": "My Studio",
+     "nodes": {
+       "living": {
+diff --git a/docs/updates/2026-10-10_02_config-sync.md b/docs/updates/2026-10-10_02_config-sync.md
+new file mode 100644
+index 0000000..2edc02b
+--- /dev/null
++++ b/docs/updates/2026-10-10_02_config-sync.md
+@@ -0,0 +1,73 @@
++# تحديث 2026-10-10 (02) — التوأم والتطبيق على نفس الأجهزة
++
++> **لكل محادثة أخرى في المشروع:** اقرأ هذا الملف والتزم بما فيه من الآن.
++> التحديث السابق: `2026-10-10_01_persona-year.md`
++
++**من:** إياد (مع Claude)
++**الجزء:** تنسيق (B المحاكي + seed + العقد)
++**الفرع / الـ commit:** main — "Sim: a newer seed adds new rooms/devices to /config; rebuild stale simulated history"
++
++## ما الذي تغيّر
++
++### المشكلة
++
++- **التوأم (`--twin-only`):** يقرأ `docs/seed.json` مباشرة، فيعرض أجهزة المطبخ والحمام الجديدة.
++- **التطبيق:** يقرأ `/config` من Firebase. هذا الـ config قديم ولا يحتوي هذه الأجهزة.
++- **حالة الغرف:** `--twin-only` لا يكتب شيئاً في Firebase، فما يظهر في التطبيق هو بقايا تشغيل سابق.
++
++### الحل
++
++1. **حقل جديد في `/config`:** `seed`، وهو رقم نسخة `docs/seed.json`. النسخة الحالية 2.
++2. **التحديث التلقائي:** عند تشغيل المحاكي مع Firebase (`--cloud` أو المحاكي المحلي)، إذا كان `seed` في قاعدة البيانات أقدم من الملف، يُضاف الجديد فقط:
++   - غرف وأجهزة وحسّاسات وعناوين i2c وعقد.
++3. **ما لا يُلمس:**
++   - لا شيء يُمسح.
++   - لا يتغيّر أي اسم أو إعداد عدّلته من التطبيق.
++   - الجهاز الذي يحتاج pin أو عنوان INA مستعملاً عندك يُتخطّى، ويُطبع اسمه.
++   - `version` يزيد 1 لكي تنزّل العقد الإعداد الجديد.
++4. **تاريخ الذكاء الاصطناعي في المحاكي:** إذا كان مبنياً من روتين آخر أو قائمة أجهزة أخرى، يُعاد بناؤه تلقائياً.
++   - لم تعد بحاجة لحذف `twin.db` يدوياً.
++   - القراءات الحقيقية لا تُلمس أبداً، فهذا يعمل فقط عندما يكون كل التاريخ محاكى.
++
++## الملفات التي تغيّرت
++
++| الملف | التغيير |
++|---|---|
++| `pi/sim_house.py` | `upgrade_config()` و`_taken()` داخل `seed()`، و`renew_simulated_history()` |
++| `docs/seed.json` | `"seed": 2` |
++| `web/lib/contract.ts` | `HomeConfig.seed?` |
++| `docs/contract.md` | شرح `seed` |
++| `ai/tests/test_config_upgrade.py` + `old_seed_v1.json` | 3 اختبارات جديدة |
++
++## هل غيّرت شيئاً مشتركاً؟ (عقد البيانات، MQTT، seed، القواعد)
++
++- **نعم، إضافة فقط:** حقل اختياري `seed` في `/config`.
++- **لم يُرفع `schema`.**
++- **الويب لا يتأثر:** `saveConfig` ينسخ الـ config كاملاً، فيحتفظ بالحقل.
++
++## هل يؤثر على عمل الأجزاء الأخرى؟
++
++| الجزء | التأثير |
++|---|---|
++| A الويب | لا شيء إلزامي. نشر Hosting (من التحديث السابق) لتظهر أيقونات hood/vent/kettle؛ قبل النشر تظهر أيقونة عامة. |
++| B الـ Pi | خدمة الـ Pi الحقيقية تستعمل نفس `upgrade_config()` عند الإقلاع بدل `--reset`. |
++| C الذكاء الاصطناعي | لا شيء. |
++| D الـ ESP32 | لا شيء جديد. العقد تنزّل الـ config عندما يزيد `version`. |
++
++## ما يجب تنفيذه بعد هذا التحديث
++
++1. `git pull`
++2. شغّل المحاكي مرة واحدة مع Firebase الحقيقي، فيضيف أجهزة المطبخ والحمام إلى `/config`:
++   ```powershell
++   python pi/sim_house.py --cloud C:\dev\secrets\ai-home-key.json --speed 1
++   ```
++3. **لا حاجة لـ `--reset`.**
++
++## قرارات جديدة (تُنسخ أيضاً إلى PROJECT_CONTEXT.md)
++
++- **تغيير الأجهزة في `docs/seed.json`:** ارفع `seed` بمقدار 1. البيوت الموجودة تأخذ الجديد بلا مسح.
++- **لكي ترى ما يحدث في التوأم داخل التطبيق:** شغّل `--cloud`، لا `--twin-only`. الأول يكتب في Firebase، والثاني يبقى في الذاكرة فقط.
++
++## التالي في هذا الجزء
++
++- نقل `upgrade_config()` إلى خدمة الـ Pi الحقيقية (جزء B).
+diff --git a/pi/sim_house.py b/pi/sim_house.py
+index d53b2c3..365ff59 100644
+--- a/pi/sim_house.py
++++ b/pi/sim_house.py
+@@ -34,6 +34,7 @@ import json
+ import math
+ import queue
+ import random
++import shutil
+ import sys
+ import threading
+ import time
+@@ -117,9 +118,77 @@ def seed(w, reset, cloud=False):
+         config = seed_cfg
+         w.put_config(config)
+         print(f"seeded /config from {SEED.relative_to(ROOT)}")
++        return config
++    upgraded = upgrade_config(config, seed_cfg)
++    if upgraded:
++        config, added, skipped = upgraded
++        w.put_config(config)
++        print(f"/config updated from {SEED.relative_to(ROOT)} (seed {config['seed']}, config v{config['version']}) — "
++              f"added: {', '.join(added) or 'nothing'}" + (f" · skipped (pin taken): {', '.join(skipped)}" if skipped else ""))
+     return config
+ 
+ 
++def _taken(config, node):
++    """Pins and INA addresses already used on a node (so an added device never collides with yours)."""
++    pins, inas = set(), set()
++    for room in config.get("rooms", {}).values():
++        if room.get("node") != node:
++            continue
++        for d in (room.get("devices") or {}).values():
++            hw = d.get("hw") or {}
++            pins |= {hw[k] for k in ("pin", "button") if hw.get(k) is not None}
++            if hw.get("ina"):
++                inas.add(hw["ina"])
++    return pins, inas
++
++
++def upgrade_config(config, seed_cfg):
++    """A newer docs/seed.json (its `seed` number went up) ADDS what is new — rooms, devices, sensors, nodes —
++    to the existing /config without wiping anything and without touching what you changed in the app.
++    Returns (new config, added, skipped) or None when there is nothing to do."""
++    if (config.get("seed") or 1) >= (seed_cfg.get("seed") or 1):
++        return None
++    new, added, skipped = json.loads(json.dumps(config)), [], []
++    nodes = new.setdefault("nodes", {})
++    for nid, n in (seed_cfg.get("nodes") or {}).items():
++        if nid not in nodes:
++            nodes[nid] = n
++            added.append(f"node {nid}")
++        else:
++            have = nodes[nid].get("i2c") or []
++            nodes[nid]["i2c"] = have + [a for a in n.get("i2c") or [] if a not in have]
++    rooms = new.setdefault("rooms", {})
++    known = {d for r in rooms.values() for d in (r.get("devices") or {})}
++    for rid, r in seed_cfg.get("rooms", {}).items():
++        if rid not in rooms:
++            rooms[rid] = r
++            added.append(f"room {rid}")
++            known |= set(r.get("devices") or {})
++            continue
++        cur = rooms[rid]
++        for k in ("sensors", "hardware"):
++            have = cur.get(k) or []
++            cur[k] = have + [x for x in r.get(k) or [] if x not in have]
++        if r.get("windowless") and "windowless" not in cur:
++            cur["windowless"] = True
++        devs = cur.get("devices") or {}
++        for did, d in (r.get("devices") or {}).items():
++            if did in known:
++                continue                                   # already there (maybe renamed or moved by you)
++            pins, inas = _taken(new, cur.get("node"))
++            hw = d.get("hw") or {}
++            if {hw.get("pin"), hw.get("button")} & pins or (hw.get("ina") and hw["ina"] in inas):
++                skipped.append(did)
++                continue
++            devs[did] = d
++            known.add(did)
++            added.append(did)
++        cur["devices"] = devs
++    new["seed"] = seed_cfg.get("seed")
++    new["version"] = (config.get("version") or 0) + 1         # the nodes download the new config
++    return new, added, skipped
++
++
+ def backfill_energy(w, config):
+     """6 days of fake energy history so the Energy chart is not empty on day one."""
+     for d in range(1, 7):
+@@ -718,11 +787,30 @@ class House:
+         return {"rooms": self.rooms, "devices": self.devices, "paused": self.ai_pause,
+                 "door_entry_at": self.door_entry_at, "away": self.away}
+ 
++    def history_of(self):
++        """What the simulated history was made from: the routine file + the AI devices of /config."""
++        from ai.spec import ai_devices
++        who = getattr(self.args, "persona", "default") if self.persona is not None else "none"
++        return f"{who}|" + ",".join(sorted(ai_devices(self.config)))
++
++    def renew_simulated_history(self, con, ai_store, name):
++        """The simulator's history is 100% simulated: when the routine file or the devices changed, an old
++        history would teach the AI the wrong house (e.g. no kitchen hood). Rebuild it. Real readings are never touched."""
++        sig = self.history_of()
++        has = con.execute("SELECT 1 FROM readings LIMIT 1").fetchone()
++        if has and ai_store.get_meta(con, "all_simulated") == "1" and ai_store.get_meta(con, "history_of") != sig:
++            print("AI: the simulated history is from another routine / device list — rebuilding it")
++            con.execute("DELETE FROM readings")
++            con.commit()
++            shutil.rmtree(ROOT / "ai" / "models" / name, ignore_errors=True)
++        ai_store.set_meta(con, "history_of", sig)
++
+     def start_ai(self, ai_parts, cloud=False, name=None):
+         """Create the AI runtime, bootstrap history if the hub is new, train if needed."""
+         AIRuntime, FirebaseSink, ai_store = ai_parts
+         name = name or ("sim_cloud" if cloud else ("twin" if self.args.twin_only else "sim"))
+         con = ai_store.connect(ROOT / "ai" / "data" / f"{name}.db")
++        self.renew_simulated_history(con, ai_store, name)
+         last = con.execute("SELECT MAX(ts) FROM readings").fetchone()[0]
+         if last and last > CLOCK.now():
+             # the twin ran ahead of real time last session: continue from there so the history stays in order
+diff --git a/web/lib/contract.ts b/web/lib/contract.ts
+index f02e91e..256e160 100644
+--- a/web/lib/contract.ts
++++ b/web/lib/contract.ts
+@@ -113,6 +113,8 @@ export interface Thresholds {
+ export interface HomeConfig {
+   schema?: number;
+   version: number;
++  /** revision of docs/seed.json this config was built from; a newer seed only ADDS rooms/devices (pi/sim_house.py upgrade_config) */
++  seed?: number;
+   home_name?: string;
+   nodes: Record<string, NodeConfig>;
+   rooms: Record<string, RoomConfig>;
+-- 
+2.43.0
+
