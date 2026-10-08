@@ -219,6 +219,31 @@ def load_persona(args):
         return None
 
 
+def ai_error_log(e):
+    """Write the full traceback to ai/data/ai_errors.log (send it to the team) -> 'file.py:line in function'."""
+    import platform
+    import traceback
+    frames = traceback.extract_tb(e.__traceback__)
+    ours = [f for f in frames if str(ROOT) in f.filename]              # the last line of OUR code
+    f = (ours or frames)[-1] if frames else None
+    try:
+        import numpy
+        import pandas
+        import sklearn
+        versions = f"numpy {numpy.__version__} · pandas {pandas.__version__} · scikit-learn {sklearn.__version__}"
+    except Exception:  # noqa: BLE001
+        versions = "?"
+    try:
+        log = ROOT / "ai" / "data" / "ai_errors.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} · Python {platform.python_version()} · {versions}\n")
+            fh.write("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+    except OSError:
+        pass
+    return f"{Path(f.filename).name}:{f.lineno} in {f.name}" if f else "?"
+
+
 def load_ai(args):
     """The real AI (ai/). Returns (AIRuntime class, sink class, store module) or None if it can't run here."""
     if args.no_ai:
@@ -842,7 +867,9 @@ class House:
             return out
         except Exception as e:  # noqa: BLE001
             self.ai_errors = getattr(self, "ai_errors", 0) + 1
-            print(f"! AI error ({type(e).__name__}: {e})" + ("" if self.ai_errors < 5 else " — AI switched off"))
+            where = ai_error_log(e)
+            print(f"! AI error ({type(e).__name__}: {e}) at {where}" + ("" if self.ai_errors < 5 else " — AI switched off")
+                  + "\n  full details: ai/data/ai_errors.log")
             if self.ai_errors >= 5:
                 self.ai = None
             return None
