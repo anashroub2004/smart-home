@@ -27,5 +27,7 @@
 - Goal: the house completes the user's tasks; manual control is the exception. Learned habits (ai/habits.py) decide
   "now" questions; the trust ladder (ai/trust.py) asks first, then acts. `python pi/learning_curve.py` (28 days, AI vs --no-ai)
   is the evidence for the report.
+- Changing devices in `docs/seed.json`: bump its `seed` number — `pi/sim_house.py upgrade_config()` then ADDS the new rooms/devices
+  to an existing /config (no wipe). `--twin-only` never touches Firebase; use `--cloud` to see the twin in the app.
 - Real Firebase project: `ai-home-aef50` (alias `prod` in .firebaserc; default stays the `demo-smart-home` emulator). See docs/DEPLOY.md.
 - Timezone: Asia/Hebron. Timestamps in Firebase: ms since epoch (UTC).

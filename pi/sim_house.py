@@ -34,6 +34,7 @@ import json
 import math
 import queue
 import random
+import shutil
 import sys
 import threading
 import time
@@ -117,7 +118,75 @@ def seed(w, reset, cloud=False):
         config = seed_cfg
         w.put_config(config)
         print(f"seeded /config from {SEED.relative_to(ROOT)}")
+        return config
+    upgraded = upgrade_config(config, seed_cfg)
+    if upgraded:
+        config, added, skipped = upgraded
+        w.put_config(config)
+        print(f"/config updated from {SEED.relative_to(ROOT)} (seed {config['seed']}, config v{config['version']}) — "
+              f"added: {', '.join(added) or 'nothing'}" + (f" · skipped (pin taken): {', '.join(skipped)}" if skipped else ""))
     return config
+
+
+def _taken(config, node):
+    """Pins and INA addresses already used on a node (so an added device never collides with yours)."""
+    pins, inas = set(), set()
+    for room in config.get("rooms", {}).values():
+        if room.get("node") != node:
+            continue
+        for d in (room.get("devices") or {}).values():
+            hw = d.get("hw") or {}
+            pins |= {hw[k] for k in ("pin", "button") if hw.get(k) is not None}
+            if hw.get("ina"):
+                inas.add(hw["ina"])
+    return pins, inas
+
+
+def upgrade_config(config, seed_cfg):
+    """A newer docs/seed.json (its `seed` number went up) ADDS what is new — rooms, devices, sensors, nodes —
+    to the existing /config without wiping anything and without touching what you changed in the app.
+    Returns (new config, added, skipped) or None when there is nothing to do."""
+    if (config.get("seed") or 1) >= (seed_cfg.get("seed") or 1):
+        return None
+    new, added, skipped = json.loads(json.dumps(config)), [], []
+    nodes = new.setdefault("nodes", {})
+    for nid, n in (seed_cfg.get("nodes") or {}).items():
+        if nid not in nodes:
+            nodes[nid] = n
+            added.append(f"node {nid}")
+        else:
+            have = nodes[nid].get("i2c") or []
+            nodes[nid]["i2c"] = have + [a for a in n.get("i2c") or [] if a not in have]
+    rooms = new.setdefault("rooms", {})
+    known = {d for r in rooms.values() for d in (r.get("devices") or {})}
+    for rid, r in seed_cfg.get("rooms", {}).items():
+        if rid not in rooms:
+            rooms[rid] = r
+            added.append(f"room {rid}")
+            known |= set(r.get("devices") or {})
+            continue
+        cur = rooms[rid]
+        for k in ("sensors", "hardware"):
+            have = cur.get(k) or []
+            cur[k] = have + [x for x in r.get(k) or [] if x not in have]
+        if r.get("windowless") and "windowless" not in cur:
+            cur["windowless"] = True
+        devs = cur.get("devices") or {}
+        for did, d in (r.get("devices") or {}).items():
+            if did in known:
+                continue                                   # already there (maybe renamed or moved by you)
+            pins, inas = _taken(new, cur.get("node"))
+            hw = d.get("hw") or {}
+            if {hw.get("pin"), hw.get("button")} & pins or (hw.get("ina") and hw["ina"] in inas):
+                skipped.append(did)
+                continue
+            devs[did] = d
+            known.add(did)
+            added.append(did)
+        cur["devices"] = devs
+    new["seed"] = seed_cfg.get("seed")
+    new["version"] = (config.get("version") or 0) + 1         # the nodes download the new config
+    return new, added, skipped
 
 
 def backfill_energy(w, config):
@@ -718,11 +787,30 @@ class House:
         return {"rooms": self.rooms, "devices": self.devices, "paused": self.ai_pause,
                 "door_entry_at": self.door_entry_at, "away": self.away}
 
+    def history_of(self):
+        """What the simulated history was made from: the routine file + the AI devices of /config."""
+        from ai.spec import ai_devices
+        who = getattr(self.args, "persona", "default") if self.persona is not None else "none"
+        return f"{who}|" + ",".join(sorted(ai_devices(self.config)))
+
+    def renew_simulated_history(self, con, ai_store, name):
+        """The simulator's history is 100% simulated: when the routine file or the devices changed, an old
+        history would teach the AI the wrong house (e.g. no kitchen hood). Rebuild it. Real readings are never touched."""
+        sig = self.history_of()
+        has = con.execute("SELECT 1 FROM readings LIMIT 1").fetchone()
+        if has and ai_store.get_meta(con, "all_simulated") == "1" and ai_store.get_meta(con, "history_of") != sig:
+            print("AI: the simulated history is from another routine / device list — rebuilding it")
+            con.execute("DELETE FROM readings")
+            con.commit()
+            shutil.rmtree(ROOT / "ai" / "models" / name, ignore_errors=True)
+        ai_store.set_meta(con, "history_of", sig)
+
     def start_ai(self, ai_parts, cloud=False, name=None):
         """Create the AI runtime, bootstrap history if the hub is new, train if needed."""
         AIRuntime, FirebaseSink, ai_store = ai_parts
         name = name or ("sim_cloud" if cloud else ("twin" if self.args.twin_only else "sim"))
         con = ai_store.connect(ROOT / "ai" / "data" / f"{name}.db")
+        self.renew_simulated_history(con, ai_store, name)
         last = con.execute("SELECT MAX(ts) FROM readings").fetchone()[0]
         if last and last > CLOCK.now():
             # the twin ran ahead of real time last session: continue from there so the history stays in order

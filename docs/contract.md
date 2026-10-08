@@ -10,7 +10,7 @@
 
 | المسار | من يكتب | الوصف |
 |---|---|---|
-| `/config` | الويب (owner) | الغرف والأجهزة والعتبات والمشاهد — مصدر رسم الواجهة. كل تعديل يزيد `version` |
+| `/config` | الويب (owner) | الغرف والأجهزة والعتبات والمشاهد — مصدر رسم الواجهة. كل تعديل يزيد `version`. `seed` = رقم نسخة `docs/seed.json` التي بُني منها؛ عندما يرتفع رقم الـ seed يُضيف الـ Pi/المحاكي الغرف والأجهزة الجديدة فقط (بلا مسح) |
 | `/home_state` | Pi | الحالة الحية: الغرف، الأجهزة، الطاقة، الباب، المشهد الحالي |
 | `/nodes/{node}` | Pi | `online`, `last_seen`, `config_version` (آخر نسخة config أكّدتها العقدة), `rssi` |
 | `/commands/{device}` | الويب ← Pi | أمر واحد معلّق لكل جهاز |
@@ -31,7 +31,7 @@
 
 ```json
 {
-  "schema": 3, "version": 1, "home_name": "My Studio",
+  "schema": 3, "version": 1, "seed": 2, "home_name": "My Studio",
   "nodes": { "living": { "name": "Living room & kitchen node", "reserved_pins": [16,17,21,22,34,35], "i2c": ["0x44","0x23"] } },
   "rooms": {
     "living": {

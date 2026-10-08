@@ -113,6 +113,8 @@ export interface Thresholds {
 export interface HomeConfig {
   schema?: number;
   version: number;
+  /** revision of docs/seed.json this config was built from; a newer seed only ADDS rooms/devices (pi/sim_house.py upgrade_config) */
+  seed?: number;
   home_name?: string;
   nodes: Record<string, NodeConfig>;
   rooms: Record<string, RoomConfig>;
