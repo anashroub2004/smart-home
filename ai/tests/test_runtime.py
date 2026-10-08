@@ -22,7 +22,7 @@ class Runtime(unittest.TestCase):
 
     def make(self, p):
         """Runtime whose models always answer probability p (dict per device or one number)."""
-        tmp = tempfile.TemporaryDirectory()
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         sink = RecSink()
         rt = AIRuntime(self.cfg, self.con, sink, model_dir=Path(tmp.name), clock=lambda: NOW)

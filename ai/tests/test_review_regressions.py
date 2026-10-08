@@ -1,5 +1,6 @@
 """Regression tests for the issues found in the code review (2026-10-06)."""
 import math
+import shutil
 import sys
 import tempfile
 import time
@@ -21,7 +22,7 @@ NOW = int(time.time()) // 900 * 900
 
 
 def runtime(cfg, con, p):
-    tmp = tempfile.TemporaryDirectory()
+    tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     sink = RecSink()
     rt = AIRuntime(cfg, con, sink, model_dir=Path(tmp.name), clock=lambda: NOW)
     from ai.features import build_features, load_slots
@@ -95,11 +96,13 @@ class Regressions(unittest.TestCase):
     def test_background_retrain_keeps_the_house_responsive(self):
         """Twin perf 2026-10-08: nightly retraining froze the simulator ~15 s. It now runs in a thread with its own
         SQLite connection; the main thread keeps writing and installs the result when it is ready."""
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        con = store.connect(Path(tmp.name) / "hub.db")
+        folder = Path(tempfile.mkdtemp())
+        # Windows can't delete a database that is still open: close it first, and never fail on the clean-up
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        con = store.connect(folder / "hub.db")
+        self.addCleanup(con.close)
         synth.fill(con, self.cfg, days=9, end_ts=NOW - 600, seed=3)
-        rt = AIRuntime(self.cfg, con, RecSink(), model_dir=Path(tmp.name) / "m", clock=lambda: NOW)
+        rt = AIRuntime(self.cfg, con, RecSink(), model_dir=folder / "m", clock=lambda: NOW)
         self.assertTrue(rt.start_retrain(NOW))
         self.assertFalse(rt.start_retrain(NOW))                    # one at a time
         store.write(con, [(NOW, "override/living_light", 1)])     # the house keeps writing meanwhile
@@ -111,7 +114,7 @@ class Regressions(unittest.TestCase):
         self.assertIsNotNone(report)
         self.assertFalse(rt.training())
         self.assertIn("devices", report)
-        mem = AIRuntime(self.cfg, memory_db(), RecSink(), model_dir=Path(tmp.name) / "m2", clock=lambda: NOW)
+        mem = AIRuntime(self.cfg, memory_db(), RecSink(), model_dir=folder / "m2", clock=lambda: NOW)
         self.assertFalse(mem.start_retrain(NOW))                    # in-memory DB: caller retrains in place
 
     def test_room_without_radar_is_never_vacant(self):
@@ -174,7 +177,7 @@ class Regressions(unittest.TestCase):
         """Bug 5: a hub with a few days of real data keeps them."""
         con = memory_db()
         store.write(con, [(NOW - 3 * 86400, "living/temp", 27.0), (NOW, "living/temp", 27.5)])
-        tmp = tempfile.TemporaryDirectory()
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         rt = AIRuntime(config(), con, RecSink(), model_dir=Path(tmp.name), clock=lambda: NOW)
         rt.bootstrap_if_needed(NOW, quiet=True)

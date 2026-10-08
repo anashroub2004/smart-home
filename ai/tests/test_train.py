@@ -18,7 +18,7 @@ class Training(unittest.TestCase):
         cls.cfg = config()
         cls.con = memory_db()
         synth.fill(cls.con, cls.cfg, days=45, end_ts=NOW - 600, seed=11)
-        cls.tmp = tempfile.TemporaryDirectory()
+        cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         cls.dir = Path(cls.tmp.name)
         cls.report = train.train_all(cls.cfg, cls.con, cls.dir, now_ts=NOW, quiet=True)
 
@@ -52,7 +52,7 @@ class Training(unittest.TestCase):
     def test_learning_before_21_days(self):
         con = memory_db()
         synth.fill(con, self.cfg, days=12, end_ts=NOW - 600, seed=2)
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             r = train.train_all(self.cfg, con, Path(d), now_ts=NOW, quiet=True)
         self.assertEqual(r["status"], "learning")
         self.assertTrue(all(m["status"] == "learning" for m in r["devices"].values()))
