@@ -236,7 +236,7 @@ class ScenarioRunner:
         pinned["use"][spec.id], pinned["rest"][spec.room] = flat(0.05), flat(0.95)
         self.ai.habits = c["pinned"] = pinned
         c.update(dev=spec.id, round=1, trust_saved=json_copy(trust.entry(self.ai.state, spec.id, "off_still")), log=[])
-        trust.entry(self.ai.state, spec.id, "off_still").update(level=0, yes=0, ok=0)
+        trust.entry(self.ai.state, spec.id, "off_still").update(level=0, yes=0, ok=0, history_off=True)  # answers only
         self.clear_pause(spec.id)
         self.ai.snooze.pop(spec.id, None)                 # earlier tests may have left "don't ask again yet"
         for sid in [k for k, sg in self.ai.suggestions.items() if sg["device"] == spec.id]:
@@ -281,7 +281,9 @@ class ScenarioRunner:
 
     def _ladder_end(self, c, ok, detail):
         from ai import trust
-        trust.entry(self.ai.state, c["dev"], "off_still").update(c["trust_saved"])   # leave your real ladder as it was
+        e = trust.entry(self.ai.state, c["dev"], "off_still")
+        e.clear()
+        e.update(c["trust_saved"])                                                   # leave your real ladder as it was
         self.ai.habits = c["habits"]
         self.ai.auto.pop(c["dev"], None)
         self.ai.save_state()

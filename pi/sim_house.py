@@ -1020,7 +1020,12 @@ class House:
             return
         self.bed_since = self.bed_since or now
         if self.bed_forgets.get(night) is None:
-            self.bed_forgets = {night: random.random() < BED_FORGET}
+            plan = self.person.plan(now) if self.persona is not None else None
+            if plan is not None:      # the routine file decides (the same nights the AI's history has)
+                off = plan.light_off_at_bed if vnow().hour >= 12 else plan.light_off_prev_night
+                self.bed_forgets = {night: not off}
+            else:
+                self.bed_forgets = {night: random.random() < BED_FORGET}
         if not self.bed_forgets[night] and now - self.bed_since >= 90 / self.speedup:
             for d in lights:
                 self.set_device(d, 0, source="button", src_label="Button", group="manual",

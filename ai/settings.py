@@ -66,6 +66,9 @@ TRUST_PROMOTE_YES = 3                    # 3 "yes" in a row -> does it itself an
 TRUST_SILENT_AFTER = 5                   # 5 automatic actions nobody undid -> does it silently
 UNDO_WINDOW_MIN = 10                     # you reversed an automatic action within 10 min = "that was wrong"
 NO_ANSWER_SNOOZE_MIN = 30                # an unanswered question is not asked again for 30 min
+SELF_OFF_DAYS = 28                       # history counts as answers: in the last 4 weeks ...
+SELF_OFF_MIN_NIGHTS = 5                  # ... you switched the light off yourself after lying down on >= 5 nights
+                                         #     -> it does it itself and tells you (level 1) without asking first
 
 # ---- anomaly detection (INA226)
 ANOMALY_K = 4.0                          # median +/- 4 x MAD

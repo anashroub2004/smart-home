@@ -89,6 +89,7 @@ class AIRuntime:
         self.room_keys = {rid: room_presence_keys(rid, room) for rid, room in config["rooms"].items()}
         self.bundles = {d: self.safe_load(d) for d in self.specs}
         self.habits = habits.load(self.model_dir / "habits.json")
+        self.trust_from_history()
         self.report = train.load_json(self.model_dir / "report.json", {})
         old = getattr(self, "detector", None)
         self.detector = anomaly.Detector(train.load_json(self.model_dir / "baselines.json", {}))
@@ -113,6 +114,24 @@ class AIRuntime:
             print(f"AI: model {name} was trained with scikit-learn {bundle.get('sklearn')}; it will be retrained")
             return None
         return bundle
+
+    def trust_reason(self, dev):
+        e = ((self.state.get("trust") or {}).get(dev) or {}).get("off_still") or {}
+        if e.get("source") == "history":
+            return (f" · you switch it off yourself after lying down ({e.get('nights')} of the last "
+                    f"{S.SELF_OFF_DAYS} nights) — switch it back on to undo")
+        return " · you said yes to this before"
+
+    def trust_from_history(self):
+        """Nights you switched the light off yourself after lying down count like "yes" answers (ai/trust.py)."""
+        state = getattr(self, "state", None)
+        if state is None:
+            return
+        for dev, spec in self.specs.items():
+            n = ((self.habits.get("self_off") or {}).get(dev) or {}).get("nights", 0)
+            if spec.kind == "light" and trust.from_history(state, dev, "off_still", n):
+                print(f"AI: {dev} — you switched it off yourself after lying down on {n} of the last "
+                      f"{S.SELF_OFF_DAYS} nights: from now on it does that itself and tells you")
 
     def minutes(self, m):
         return m * 60 / self.speed
@@ -192,7 +211,7 @@ class AIRuntime:
         devices_changed = set(self.report.get("devices", {})) != set(self.specs)
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")
                       in ("ready", "relearning") for d in self.specs)
-        no_habits = not (self.model_dir / "habits.json").exists()      # models from before the habit tables
+        no_habits = "self_off" not in self.habits      # models from before the habit tables / the history-as-answers
         if not self.report or devices_changed or missing or no_habits or now - trained > 86400:
             self.retrain(now, quiet=quiet)
         else:
@@ -652,7 +671,7 @@ class AIRuntime:
                 continue
             saved = energy.saved_estimate(self.watts(st, spec))
             a = dict(device=dev, v=0, src_label="AI · learned", saved_wh=saved, confidence=round(1 - u, 2),
-                     short="You seem to be resting", why=why + " · you said yes to this before",
+                     short="You seem to be resting", why=why + self.trust_reason(dev),
                      title=f"{self.labels.get(dev, dev)} turned off")
             actions.append(a)
             self.ledger.record_saved("ai", saved)

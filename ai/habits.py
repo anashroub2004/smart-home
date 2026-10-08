@@ -66,6 +66,38 @@ def learn(slots, specs, now):
     return {"use": use, "rest": rest}
 
 
+def self_off(con, slots, specs, now_ts, days=None):
+    """History counts as answers: nights in the last `days` on which you switched a light off BY HAND and stayed
+    in the room (lying down to sleep / rest). -> {dev: {"nights": n, "days": d}}.
+    The habit says "the light off while I rest here is what I want" — the same thing 3 "yes" answers say."""
+    import pandas as pd
+    from .features import to_local
+    days = days or S.SELF_OFF_DAYS
+    since = int(now_ts - days * 86400)
+    out = {}
+    if slots is None or slots.empty:
+        return out
+    for dev, spec in specs.items():
+        if spec.kind != "light" or not spec.occ or spec.occ not in slots or spec.state not in slots:
+            continue
+        raw = pd.read_sql("SELECT ts FROM readings WHERE key = ? AND ts >= ? AND ts <= ?", con,
+                          params=(f"override/{dev}", since, int(now_ts)))
+        nights = set()
+        for t in to_local(raw.ts):
+            if not (t.hour >= 20 or t.hour < 5):
+                continue
+            slot = t.floor(S.SLOT)
+            after = slot + pd.Timedelta(minutes=S.SLOT_MIN)
+            if after not in slots.index or slot not in slots.index:
+                continue
+            off = (slots.at[after, spec.state] or 0) <= 0.5               # the press switched it OFF ...
+            stayed = all((slots.at[x, spec.occ] or 0) >= 0.5 for x in (slot, after))   # ... and you stayed there
+            if off and stayed:
+                nights.add((t - pd.Timedelta(hours=12)).date())
+        out[dev] = {"nights": len(nights), "days": days}
+    return out
+
+
 def save(path, habits):
     path.write_text(json.dumps(habits))
 

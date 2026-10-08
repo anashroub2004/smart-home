@@ -158,7 +158,9 @@ def train_all(config, con, model_dir=None, now_ts=None, labels=None, quiet=False
                 print(f"{dev:16s} learning: {metrics['days']}/{S.MIN_DAYS} days of data")
     # learned habits (questions about NOW: light on when you walk in? light off while you rest?)
     use = slots[usable(slots) & (slots.index >= local_now(since))]
-    habits.save(model_dir / "habits.json", habits.learn(use, specs, now))
+    learned = habits.learn(use, specs, now)
+    learned["self_off"] = habits.self_off(con, use, specs, now_ts)
+    habits.save(model_dir / "habits.json", learned)
     # presence
     doors = door_slots(con, since)
     pm, pmeta = presence.train(slots, doors)
