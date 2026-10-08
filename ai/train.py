@@ -19,18 +19,14 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
-from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import brier_score_loss, f1_score, precision_score, recall_score
 
 from . import anomaly, drift, explain, habits, presence
 from . import settings as S
 from . import store
+from .fit import fit_model
 from .features import CORE, build_features, load_slots, local_now, usable
 from .spec import ai_devices, energy_devices
-
-
-def new_model():
-    return HistGradientBoostingClassifier(**S.MODEL_PARAMS)
 
 
 def sample_weights(index, y, watts, now):
@@ -90,7 +86,7 @@ def train_device(slots, spec, now):
     cut = X.index.max() - pd.Timedelta(days=S.TEST_DAYS)
     tr, te = X.index <= cut, X.index > cut
     w = sample_weights(X.index, y, spec.watts, now)
-    m = new_model().fit(X[tr], y[tr], sample_weight=w[tr])
+    m = fit_model(X[tr], y[tr], sample_weight=w[tr])
     proba = m.predict_proba(X[te])[:, 1]
     p = (proba >= 0.5).astype(int)
     yt = y[te].values
@@ -109,7 +105,7 @@ def train_device(slots, spec, now):
         drift=d,
         features=list(X.columns),
     )
-    final = new_model().fit(X, y, sample_weight=w)
+    final = fit_model(X, y, sample_weight=w)
     bundle = dict(model=final, features=list(X.columns), typical=explain.typical_values(X[X.index > cut]),
                   metrics=metrics, drift=d["drift"], levels=preferred_levels(slots, spec),
                   sklearn=sklearn.__version__, trained=datetime.now().isoformat(timespec="seconds"))

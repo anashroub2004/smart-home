@@ -15,7 +15,8 @@ from . import energy, store, synth
 from . import settings as S
 from .features import CORE, build_features, load_slots, local_now, usable
 from .spec import ai_devices
-from .train import change_accuracy, new_model, sample_weights
+from .fit import fit_model
+from .train import change_accuracy, sample_weights
 
 
 def drift_experiment(config, seeds=(1, 2, 3), change_days=14, test_days=7, total_days=98):
@@ -43,7 +44,7 @@ def drift_experiment(config, seeds=(1, 2, 3), change_days=14, test_days=7, total
                 if window:
                     tr &= X.index > cut - pd.Timedelta(days=window - S.TEST_DAYS)
                 w = sample_weights(X.index[tr], y[tr], spec.watts, nowl) if decay else None
-                m = new_model().fit(X[tr], y[tr], sample_weight=w)
+                m = fit_model(X[tr], y[tr], sample_weight=w)
                 p = m.predict(X[te])
                 scores[name].append(f1_score(y[te], p, zero_division=0))
                 near[name].append(change_accuracy(X.now[te].values, y[te].values, p)[1] or 0)

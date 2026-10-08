@@ -29,7 +29,8 @@ from . import settings as S
 from . import store
 from .features import CORE, build_features, load_slots, usable
 from .spec import ai_devices
-from .train import change_accuracy, new_model
+from .fit import fit_model
+from .train import change_accuracy
 
 REPORTS = Path(__file__).resolve().parent / "reports"
 
@@ -89,7 +90,7 @@ def fit_predict(X, y, tr, te, spec, now, decay=True, half_life=S.HALF_LIFE_DAYS)
         w = np.power(0.5, np.asarray(age) / half_life) * np.where(np.asarray(y[tr]) == 0, cost, 1.0)
     else:
         w = np.ones(int(tr.sum()))
-    m = new_model().fit(X[tr], y[tr], sample_weight=w)
+    m = fit_model(X[tr], y[tr], sample_weight=w)
     return m.predict_proba(X[te])[:, 1]
 
 

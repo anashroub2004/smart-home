@@ -5,10 +5,10 @@ Used for: Insights ("usually home around 16:30"), the Away scene, and the plan s
 """
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
 
 from . import settings as S
 from .features import home_occupancy, run_length, time_features, usable
+from .fit import fit_model
 
 FEATURES = ["h_sin", "h_cos", "dow", "weekend", "home", "lag1", "lag2", "yday", "lweek", "run", "door_recent"]
 
@@ -34,9 +34,9 @@ def train(slots, door_slots=None):
         return None, {"status": "learning", "days": round(len(X) / S.SLOTS_PER_DAY)}
     cut = X.index.max() - pd.Timedelta(days=S.TEST_DAYS)
     tr = X.index <= cut
-    m = HistGradientBoostingClassifier(**S.MODEL_PARAMS).fit(X[tr], y[tr])
+    m = fit_model(X[tr], y[tr])
     acc = float((m.predict(X[~tr]) == y[~tr].values).mean())
-    final = HistGradientBoostingClassifier(**S.MODEL_PARAMS).fit(X, y)
+    final = fit_model(X, y)
     return final, {"status": "ready", "accuracy": round(acc, 3)}
 
 

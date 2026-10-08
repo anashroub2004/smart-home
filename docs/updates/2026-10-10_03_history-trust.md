@@ -73,3 +73,9 @@
 - **في `ai/data/ai_errors.log`:** القصة الكاملة (traceback) مع نسخ Python وnumpy وpandas وscikit-learn.
 
 أرسل هذا الملف للفريق عند أي `! AI error`.
+
+## إضافة 2: scikit-learn 1.9.1
+
+- **المشكلة:** على جهاز Windows بنسخة scikit-learn 1.9.1، كان تدريب كل جهاز يفشل بالخطأ `ValueError: window shape cannot be larger than input array shape`. الخطأ يظهر داخل `fit`، وعلى الأرجح من الإيقاف المبكر التلقائي في المكتبة. لذلك بقي الـ AI على "learning".
+- **الحل:** ملف جديد `ai/fit.py` فيه `fit_model()`، تستعمله كل أماكن التدريب. إذا ظهر هذا الخطأ تحديداً، يدرّب نفس النموذج بلا إيقاف مبكر. أي خطأ آخر يظهر كما هو.
+- **النسخة التي جُرّبت عليها الأرقام:** 1.8.0.
