@@ -198,7 +198,7 @@ export default function InsightsPage() {
           </div>
         )}
         <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
-          {m?.model ?? "Gradient Boosting"}, trained nightly on your hub with the last 8 weeks. When you change a device by hand,
+          {m?.model ?? "Gradient Boosting"}, trained nightly on your hub with the last 16 weeks (recent days count more). When you change a device by hand,
           the AI leaves it alone for {pauseH} hours and learns from it.
           {simulated ? " These numbers come from simulated history until your home has 3 weeks of its own data." : ""}
         </div>
