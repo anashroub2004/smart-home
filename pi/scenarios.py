@@ -482,10 +482,12 @@ class ScenarioRunner:
         st = self.ai.state.get("stats", {})
         d = {k: round(st.get(k, 0) - c["before"].get(k, 0), 2) for k in
              ("ai_on", "ai_hit", "ai_miss", "smart_off", "suggested", "accepted", "dismissed", "expired", "skipped",
-              "saved_wh", "missed_wh")}
+              "saved_wh", "missed_wh", "ai_entry_on", "ai_auto_off")}
         n = {k: self.h.counts.get(k, 0) - c["counts"].get(k, 0) for k in
              ("rule_on", "rule_off", "manual_on", "manual_off", "ai_on", "ai_off")}
-        return True, (f"AI: switched on {d['ai_on']} (came {d['ai_hit']}, missed {d['ai_miss']}), skipped by sensors "
+        return True, (f"AI switched {n['ai_on']} on and {n['ai_off']} off: lights on as you walked in "
+                      f"{d['ai_entry_on']}, lights off as you lay down {d['ai_auto_off']}, pre-cooling {d['ai_on']} "
+                      f"(came {d['ai_hit']}, missed {d['ai_miss']}), skipped by sensors "
                       f"{d['skipped']}, smart off {d['smart_off']} (~{d['saved_wh']} Wh saved, {d['missed_wh']} Wh "
                       f"used by misses), asked {d['suggested']} (expired {d['expired']}). Rules: on {n['rule_on']}, "
                       f"off {n['rule_off']}. By hand: on {n['manual_on']}, off {n['manual_off']}.")
