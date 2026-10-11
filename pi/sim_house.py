@@ -266,6 +266,7 @@ class House:
         self.speedup = 10 if args.fast and not args.speed else 1
         self.offline = set(args.offline or [])
         self.override_until = {}         # device -> ts; manual control pauses AI/rules
+        self.rules_off = set()           # devices a test scenario keeps the comfort rules away from
         self.empty_since = {}            # room -> ts
         self.dark_since = {}             # room -> ts the person has been sitting in the dark
         self.manual_at = {}              # device -> ts of the last app / wall-button control
@@ -723,7 +724,7 @@ class House:
             else:
                 self.empty_since.setdefault(rid, t)
             for dev, cfg in (room.get("devices") or {}).items():
-                if not self.writable(dev) or not self.ctrl(dev).get("rules"):
+                if not self.writable(dev) or not self.ctrl(dev).get("rules") or dev in self.rules_off:
                     continue
                 st, r = self.devices[dev], self.drules(dev)
                 empty_min = th["empty_room_off_min"]

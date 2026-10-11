@@ -128,6 +128,7 @@ class ScenarioRunner:
         self.h.faults.update(s["faults"])
         self.h.person.habits = s["habits"]
         self.h.person.give_back()
+        self.h.rules_off.clear()
         self.clock.set_speed(s["speed"])
         res = {"id": c["id"], "title": c["title"], "ok": ok, "detail": detail,
                "at": datetime.fromtimestamp(self.now()).strftime("%H:%M"),
@@ -379,6 +380,9 @@ class ScenarioRunner:
             return self.done(False, "no AI fan in a room with a radar")
         c["dev"] = spec.id
         self.clear_pause(spec.id)
+        # the room is made hot so the AI may ask; keep the "on above 28°C" rule away from this fan, or it switches
+        # the fan on, the question disappears because the fan is on, and the test passes for the wrong reason
+        self.h.rules_off.add(spec.id)
         if self.h.devices[spec.id]["v"]:
             self.set_dev(spec.id, 0)
         self.h.person.take_over(spec.room, "Relaxing")
@@ -390,6 +394,12 @@ class ScenarioRunner:
     def check_suggestion_expiry(self, c, m):
         if not c.get("sid"):
             return False, "the AI refused to ask (sensors disagreed)"
+        st = self.h.devices[c["dev"]]
+        if st["v"]:
+            return False, (f"the fan was switched on by {st.get('src')} at {m:.1f} min, so the question was never "
+                           f"tested (it must stay open until you leave)")
+        if c["stage"] == 0 and c["sid"] not in self.ai.suggestions:
+            return False, f"question gone after {m:.1f} min while you were still in the room"
         if c["stage"] == 0 and m >= 1:
             c["stage"], c["left"] = 1, m
             self.h.person.take_over(OUT)
