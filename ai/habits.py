@@ -8,8 +8,9 @@ of data never give 0 % or 100 %:
     rest[room]    P(PIR quiet | someone in the room)         "you usually rest / sleep here now"
 
 They answer questions about NOW (the gradient boosting models predict 60 minutes ahead):
-    - you walk into a dark room: switch the light on?   -> use over the next 30 min >= 0.30
-    - the light is on, you lie still: switch it off?    -> use <= 0.20 and rest >= 0.80 (+ PIR quiet 10 min)
+    - you walk into a dark room: switch the light on?   -> always, except back within 15 min to where you sleep now
+    - the light is on, you lie still: switch it off?    -> use <= 0.50 and rest >= 0.80, after your learned
+                                                           "getting ready" time (self_off prep_min, else 10 min)
 Saved as ai/models/habits.json. Readable and explainable: "you had it on 9 of the last 10 evenings at this time".
 """
 import json
@@ -68,8 +69,10 @@ def learn(slots, specs, now):
 
 def self_off(con, slots, specs, now_ts, days=None):
     """History counts as answers: nights in the last `days` on which you switched a light off BY HAND and stayed
-    in the room (lying down to sleep / rest). -> {dev: {"nights": n, "days": d}}.
-    The habit says "the light off while I rest here is what I want" — the same thing 3 "yes" answers say."""
+    in the room (lying down to sleep / rest). -> {dev: {"nights": n, "days": d, "prep_min": m, "prep_nights": k}}.
+    The habit says "the light off while I rest here is what I want" — the same thing 3 "yes" answers say.
+    prep_min = your "getting ready" time: how long you lay still (no PIR movement) before you switched it off,
+    median of those nights + a margin, within limits; None with fewer than SELF_OFF_MIN_NIGHTS nights."""
     import pandas as pd
     from .features import to_local
     days = days or S.SELF_OFF_DAYS
@@ -82,8 +85,9 @@ def self_off(con, slots, specs, now_ts, days=None):
             continue
         raw = pd.read_sql("SELECT ts FROM readings WHERE key = ? AND ts >= ? AND ts <= ?", con,
                           params=(f"override/{dev}", since, int(now_ts)))
-        nights = set()
-        for t in to_local(raw.ts):
+        pir = next((k for k in spec.presence_keys if k.endswith("/pir")), None)
+        nights, prep = set(), {}
+        for ts, t in zip(raw.ts, to_local(raw.ts)):
             if not (t.hour >= 20 or t.hour < 5):
                 continue
             slot = t.floor(S.SLOT)
@@ -93,9 +97,35 @@ def self_off(con, slots, specs, now_ts, days=None):
             off = (slots.at[after, spec.state] or 0) <= 0.5               # the press switched it OFF ...
             stayed = all((slots.at[x, spec.occ] or 0) >= 0.5 for x in (slot, after))   # ... and you stayed there
             if off and stayed:
-                nights.add((t - pd.Timedelta(hours=12)).date())
-        out[dev] = {"nights": len(nights), "days": days}
+                night = (t - pd.Timedelta(hours=12)).date()
+                nights.add(night)
+                if pir and night not in prep:
+                    prep[night] = still_before(con, pir, int(ts))
+        m = prep_minutes(list(prep.values()))
+        out[dev] = {"nights": len(nights), "days": days, "prep_min": m, "prep_nights": len(prep) if m else 0}
     return out
+
+
+def still_before(con, pir, ts):
+    """Minutes you lay still before `ts`: since the PIR last saw movement (the press itself, the last
+    PREP_IGNORE_S seconds, does not count). No movement in the last PREP_LOOK_MIN -> PREP_LOOK_MIN."""
+    end = ts - S.PREP_IGNORE_S
+    moved = con.execute("SELECT MAX(ts) FROM readings WHERE key = ? AND value >= 0.5 AND ts >= ? AND ts <= ?",
+                        (pir, ts - S.PREP_LOOK_MIN * 60, end)).fetchone()[0]
+    if moved is None:
+        return float(S.PREP_LOOK_MIN)
+    # readings are written on change: stillness starts at the first "0" after that movement (like quiet_since)
+    still = con.execute("SELECT MIN(ts) FROM readings WHERE key = ? AND value < 0.5 AND ts > ? AND ts <= ?",
+                        (pir, moved, end)).fetchone()[0]
+    return (ts - still) / 60 if still is not None else 0.0
+
+
+def prep_minutes(values):
+    """Median + margin, within PREP_LIMITS_MIN; None with too few nights (the fixed STILL_OFF_MIN is used then)."""
+    if len(values) < S.SELF_OFF_MIN_NIGHTS:
+        return None
+    lo, hi = S.PREP_LIMITS_MIN
+    return round(min(hi, max(lo, float(np.median(values)) + S.PREP_MARGIN_MIN)), 1)
 
 
 def save(path, habits):

@@ -37,6 +37,11 @@ from .features import CORE, build_features, load_slots, local_now
 from .spec import ai_devices, device_label, energy_devices, room_presence_keys, visible_rooms
 
 
+def night_of(ts):
+    """The night a moment belongs to (noon to noon, local time): 01:30 on Tuesday is Monday's night."""
+    return (local_now(ts) - pd.Timedelta(hours=12)).date()
+
+
 def local(ts):
     """unix seconds -> home wall-clock time (Asia/Hebron), whatever the machine's own time zone is."""
     return pd.Timestamp(ts, unit="s", tz="UTC").tz_convert(S.TZ)
@@ -68,6 +73,8 @@ class AIRuntime:
         self.occ_since = {}       # room -> ts someone came in (any presence sensor)
         self.entry_done = {}      # device -> occ_since of the entry already decided (one decision per entry)
         self.quiet_since = {}     # room -> ts the PIR went quiet while the radar still sees someone
+        self.left_at = {}         # room -> ts the last person left it (a short night trip back = no light)
+        self.no_off_night = {}    # device -> night you undid "light off while you rest" (no second try that night)
         self.auto = {}            # device -> {at, v, kind} automatic action that you may still undo
         self.closed = {}          # suggestion id -> info of a closed suggestion (an answer can arrive late)
         self.house_rooms = {}     # latest room readings (for borrowed temperature / light)
@@ -143,6 +150,10 @@ class AIRuntime:
         b = habits.use_now(self.habits, dev, now, S.HABIT_AHEAD_MIN)
         return None if a is None or b is None else max(a, b)
 
+    def prep_min(self, dev):
+        """Your learned "getting ready" time for this light (minutes lying still before you switch it off), or None."""
+        return ((self.habits.get("self_off") or {}).get(dev) or {}).get("prep_min")
+
     def handles_entry(self, dev):
         """True when the AI decides about this light when you walk in (the 'dark room' rule is then only the
         fallback): the AI is ready for it, has learned your habits for it, and you did not just control it."""
@@ -216,7 +227,8 @@ class AIRuntime:
         devices_changed = set(self.report.get("devices", {})) != set(self.specs)
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")
                       in ("ready", "relearning") for d in self.specs)
-        no_habits = "self_off" not in self.habits      # models from before the habit tables / the history-as-answers
+        no_habits = ("self_off" not in self.habits      # models from before the habit tables / the history-as-answers
+                     or any("prep_min" not in v for v in self.habits["self_off"].values()))   # / the prep time
         if not self.report or devices_changed or missing or no_habits or now - trained > 86400:
             self.retrain(now, quiet=quiet)
         else:
@@ -507,8 +519,8 @@ class AIRuntime:
         for rid, room in rooms.items():                      # entries + "lying still" (radar yes, PIR quiet)
             if gate.room_occupied(room):
                 self.occ_since.setdefault(rid, now)
-            else:
-                self.occ_since.pop(rid, None)
+            elif self.occ_since.pop(rid, None) is not None:
+                self.left_at[rid] = now
             pir = gate.value(room, "pir")
             if pir == 0 and gate.value(room, "mmwave"):
                 self.quiet_since.setdefault(rid, now)
@@ -549,7 +561,8 @@ class AIRuntime:
                               why=f"Predicted ({round(pend['p'] * 100)}%) but the sensors said: {reason}",
                               change="No change", confidence=round(pend["p"], 2), src_label="AI", tags=["ai"])
 
-        # 1b. you walked into a dark room: the AI decides about the light from your learned habit
+        # 1b. you walked into a dark room: the AI switches the light on — except a short trip
+        #     back to the room you usually sleep in now (bathroom at 3 am: the light stays off)
         acted_now = {a["device"] for a in actions}
         for dev, spec in self.specs.items():
             since = self.occ_since.get(spec.room)
@@ -571,22 +584,27 @@ class AIRuntime:
             u = self.habit_use(dev, now)
             pct = round(u * 100)
             rest = habits.rest_now(self.habits, spec.room, now)
-            need = S.HABIT_ON_AT_REST if rest is not None and rest >= S.REST_AT else S.HABIT_ON_AT
-            if u >= need:
-                actions.append(dict(device=dev, v=1, level=None, confidence=round(u, 2), src_label=f"AI · habit {pct}%",
+            left = self.left_at.get(spec.room)
+            away_min = (since - left) * self.speed / 60 if left is not None else None
+            back_to_sleep = (rest is not None and rest >= S.REST_AT and away_min is not None
+                             and since - left <= self.minutes(S.NIGHT_RETURN_MIN))
+            if not back_to_sleep:
+                actions.append(dict(device=dev, v=1, level=None, confidence=round(max(u, 0.5), 2),
+                                    src_label=f"AI · habit {pct}%" if u >= S.HABIT_ON_AT else "AI · dark room",
                                     short="You came in and it is dark",
-                                    why=f"You came in, the room is dark ({lux:.0f} lx) and you usually have it on at "
-                                        f"this time ({pct}% of the time in the last weeks)"))
+                                    why=f"You came in and the room is dark ({lux:.0f} lx) · you have it on "
+                                        f"{pct}% of the time at this hour in the last weeks"
+                                        + (" · it switches it off once you lie still for your usual time"
+                                           if rest is not None and rest >= S.REST_AT else "")))
                 self.stat("ai_entry_on")
             else:
                 self.auto[dev] = dict(at=now, v=0, kind=None)   # switching it on yourself = "you got it wrong"
                 self.stat("ai_entry_skip")
                 self.sink.log("ai", "ai", f"{self.labels.get(dev, dev)} left off", device=dev, room=spec.room,
-                              short="You usually keep it off at this time",
-                              why=f"You came in and it is dark ({lux:.0f} lx), but you usually keep it off now "
-                                  f"({pct}% on in the last weeks"
-                                  + (", and you usually rest here at this time" if need > S.HABIT_ON_AT else "")
-                                  + ") — e.g. going to sleep. Switch it on if you need it; the AI learns from that.", change="No change", confidence=round(1 - u, 2),
+                              short="Back to sleep — light left off",
+                              why=f"You came back after {away_min:.0f} min and you usually sleep here at this time "
+                                  f"({round(rest * 100)}%), so the light stays off. Switch it on if you need it; "
+                                  f"the AI learns from that.", change="No change", confidence=round(rest, 2),
                               src_label="AI · habit", tags=["ai"])
 
         # 2. waste guard: the AI switched it on — did anyone come?
@@ -658,8 +676,11 @@ class AIRuntime:
             if spec.kind != "light" or not st.get("v") or dev in acted or dev in self.guards:
                 continue
             quiet = self.quiet_since.get(spec.room)
-            if quiet is None or now - quiet < self.minutes(S.STILL_OFF_MIN) or self.paused(dev, house, now):
+            prep = self.prep_min(dev)
+            if quiet is None or now - quiet < self.minutes(prep or S.STILL_OFF_MIN) or self.paused(dev, house, now):
                 continue
+            if self.no_off_night.get(dev) == night_of(now):
+                continue                                   # you undid it tonight: not again before tomorrow
             if now < self.snooze.get(dev, 0) or any(sg["device"] == dev for sg in self.suggestions.values()):
                 continue
             u, rest = self.habit_use(dev, now), habits.rest_now(self.habits, spec.room, now)
@@ -669,6 +690,9 @@ class AIRuntime:
             why = (f"You seem to be resting: the radar sees you but there was no movement for {still_min} min, at this "
                    f"time you usually rest here ({round(rest * 100)}%) and the light is not your habit now "
                    f"({round(u * 100)}% on)")
+            if prep:
+                n = ((self.habits.get("self_off") or {}).get(dev) or {}).get("prep_nights", 0)
+                why += f" · you usually switch it off yourself about {prep:g} min after lying down ({n} nights)"
             lvl = trust.level(self.state, dev, "off_still")
             if lvl == S.TRUST_ASK:
                 self.ask(dev, spec, "off", "off_still", 1 - u, why, rooms.get(spec.room) or {}, now,
@@ -809,6 +833,8 @@ class AIRuntime:
         if a and v is not None and int(v) != a["v"] and now - a["at"] <= self.minutes(S.UNDO_WINDOW_MIN):
             self.auto.pop(dev)
             self.stat("ai_undone")
+            if a.get("kind") == "off_still":
+                self.no_off_night[dev] = night_of(now)
             if a.get("kind"):
                 old, new = trust.undone(self.state, dev, a["kind"])
                 if new < old:
