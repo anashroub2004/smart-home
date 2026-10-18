@@ -19,6 +19,7 @@ Priority: manual > safety > rules > AI.
     devices {id: {v, level?, watts?, src?}}
     paused  {id: until_ms}           (/ai_pause from the app)
     door_entry_at  unix seconds of the last front-door entry (or None)
+    door_exit_at   unix seconds of the last exit through the front door (exit button, or None)
     away    True while the Away scene is on
 """
 from __future__ import annotations
@@ -193,7 +194,9 @@ class AIRuntime:
         rooms = house.get("rooms") or {}
         if any(gate.room_occupied(rooms.get(r)) for r in visible_rooms(self.config)):
             return True
-        entry = house.get("door_entry_at")
+        entry, out = house.get("door_entry_at"), house.get("door_exit_at")
+        if entry and out and out >= entry:
+            return False                  # went out after the last entry, and no sensor sees anyone
         return bool(entry and now - entry < self.minutes(S.HOME_RECENT_ENTRY_MIN))
 
     # ------------------------------------------------------------------ training

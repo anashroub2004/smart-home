@@ -88,6 +88,17 @@ class Runtime(unittest.TestCase):
         rt2.tick(house({"bathroom": 1}), NOW + 10, dt=10)
         self.assertTrue(any("left off" in e["title"] for e in sink2.events))
 
+    def test_going_out_ends_the_door_entry_window(self):
+        rt, _ = self.rt(use=0.9)
+        came = house({}, door_entry_at=NOW - 300)
+        self.assertTrue(rt.someone_home(came, NOW))                        # just came in, no sensor sees you yet
+        left = {**came, "door_exit_at": NOW - 120}
+        self.assertFalse(rt.someone_home(left, NOW))                       # then went out again
+        back = {**house({}, door_entry_at=NOW - 60), "door_exit_at": NOW - 120}
+        self.assertTrue(rt.someone_home(back, NOW))                        # out, then back in
+        seen = {**house({"living": 1}, door_entry_at=NOW - 300), "door_exit_at": NOW - 120}
+        self.assertTrue(rt.someone_home(seen, NOW))                        # a sensor always wins
+
     def test_no_habits_means_the_rule_decides(self):
         rt, _ = self.rt(use=0.9)
         rt.habits = {"use": {}, "rest": {}}
