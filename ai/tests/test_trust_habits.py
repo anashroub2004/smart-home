@@ -76,6 +76,18 @@ class Runtime(unittest.TestCase):
         acts = rt2.tick(house({"bedroom": 1}, lux=10), NOW + 20, dt=10)   # one decision per entry
         self.assertEqual(sum("left off" in e["title"] for e in sink2.events), 1)
 
+    def test_entry_in_a_windowless_room_decides(self):
+        # the bathroom has no window and no BH1750: it is dark, not "waiting for a reading"
+        rt, _ = self.rt(use=0.9)
+        self.assertTrue(rt.handles_entry("bathroom_light"))
+        rt.tick(house({}), NOW, dt=10)
+        acts = rt.tick(house({"bathroom": 1}), NOW + 10, dt=10)
+        self.assertIn(("bathroom_light", 1), [(a["device"], a["v"]) for a in acts])
+        rt2, sink2 = self.rt(use=0.05)
+        rt2.tick(house({}), NOW, dt=10)
+        rt2.tick(house({"bathroom": 1}), NOW + 10, dt=10)
+        self.assertTrue(any("left off" in e["title"] for e in sink2.events))
+
     def test_no_habits_means_the_rule_decides(self):
         rt, _ = self.rt(use=0.9)
         rt.habits = {"use": {}, "rest": {}}

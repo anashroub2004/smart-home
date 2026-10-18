@@ -157,6 +157,8 @@ class AIRuntime:
         """temperature / light for a device, borrowed from another room when its own room has no sensor."""
         temp = gate.value(rooms.get(spec.temp.split("/")[0]), "temp") if spec.temp else None
         lux = gate.value(rooms.get(spec.lux.split("/")[0]), "lux") if spec.lux else None
+        if lux is None and (self.config["rooms"].get(spec.room) or {}).get("windowless"):
+            lux = 0             # no window and no light sensor: always dark (same as the Pi's room_lux)
         return temp, lux
 
     def thresholds(self, spec, hour, drift=False):
