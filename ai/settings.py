@@ -68,6 +68,8 @@ NO_ANSWER_SNOOZE_MIN = 30                # an unanswered question is not asked a
 SELF_OFF_DAYS = 28                       # history counts as answers: in the last 4 weeks ...
 SELF_OFF_MIN_NIGHTS = 5                  # ... you switched the light off yourself after lying down on >= 5 nights
                                          #     -> it does it itself and tells you (level 1) without asking first
+HISTORY_BACK_NIGHTS = 3                  # after a "no" / undo the history stops counting, until you switched the light
+                                         #     off yourself on 3 later nights: then it does it itself again (level 1)
 PREP_MARGIN_MIN = 2                      # "getting ready" time (lying still -> you switch the light off yourself):
 PREP_LIMITS_MIN = (2, 20)                #     median of those nights + 2 min, kept within 2..20 min; it replaces
                                          #     STILL_OFF_MIN once there are SELF_OFF_MIN_NIGHTS nights

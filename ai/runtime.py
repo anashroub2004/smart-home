@@ -125,6 +125,9 @@ class AIRuntime:
 
     def trust_reason(self, dev):
         e = ((self.state.get("trust") or {}).get(dev) or {}).get("off_still") or {}
+        if e.get("source") == "history" and e.get("back"):
+            return (f" · you switched it off yourself after lying down on {e.get('nights')} nights since you last "
+                    f"undid it — switch it back on to undo")
         if e.get("source") == "history":
             return (f" · you switch it off yourself after lying down ({e.get('nights')} of the last "
                     f"{S.SELF_OFF_DAYS} nights) — switch it back on to undo")
@@ -136,10 +139,16 @@ class AIRuntime:
         if state is None:
             return
         for dev, spec in self.specs.items():
-            n = ((self.habits.get("self_off") or {}).get(dev) or {}).get("nights", 0)
-            if spec.kind == "light" and trust.from_history(state, dev, "off_still", n):
-                print(f"AI: {dev} — you switched it off yourself after lying down on {n} of the last "
-                      f"{S.SELF_OFF_DAYS} nights: from now on it does that itself and tells you")
+            so = (self.habits.get("self_off") or {}).get(dev) or {}
+            n = so.get("nights", 0)
+            if spec.kind == "light" and trust.from_history(state, dev, "off_still", n, so.get("night_list")):
+                e = trust.entry(state, dev, "off_still")
+                if e.get("back"):
+                    print(f"AI: {dev} — you switched it off yourself after lying down on {e['nights']} nights since "
+                          f"you undid it: it does that itself again and tells you")
+                else:
+                    print(f"AI: {dev} — you switched it off yourself after lying down on {n} of the last "
+                          f"{S.SELF_OFF_DAYS} nights: from now on it does that itself and tells you")
 
     def minutes(self, m):
         return m * 60 / self.speed
@@ -228,7 +237,7 @@ class AIRuntime:
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")
                       in ("ready", "relearning") for d in self.specs)
         no_habits = ("self_off" not in self.habits      # models from before the habit tables / the history-as-answers
-                     or any("prep_min" not in v for v in self.habits["self_off"].values()))   # / the prep time
+                     or any("night_list" not in v for v in self.habits["self_off"].values()))   # / prep time + nights
         if not self.report or devices_changed or missing or no_habits or now - trained > 86400:
             self.retrain(now, quiet=quiet)
         else:
@@ -836,7 +845,7 @@ class AIRuntime:
             if a.get("kind") == "off_still":
                 self.no_off_night[dev] = night_of(now)
             if a.get("kind"):
-                old, new = trust.undone(self.state, dev, a["kind"])
+                old, new = trust.undone(self.state, dev, a["kind"], night_of(now))
                 if new < old:
                     self.trust_changed(dev, a["kind"], new, "you reversed what it did")
                 self.save_state()
@@ -855,7 +864,7 @@ class AIRuntime:
             return
         kind = info.get("kind")
         if kind:                                          # trust ladder: 3 "yes" in a row -> it does it itself
-            old, lvl = trust.answered(self.state, dev, kind, accepted)
+            old, lvl = trust.answered(self.state, dev, kind, accepted, night_of(now))
             if lvl != old:
                 self.trust_changed(dev, kind, lvl, "you said yes 3 times in a row" if lvl > old else "you said no")
         hour = local_now(info.get("at", now)).hour

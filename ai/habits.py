@@ -102,7 +102,8 @@ def self_off(con, slots, specs, now_ts, days=None):
                 if pir and night not in prep:
                     prep[night] = still_before(con, pir, int(ts))
         m = prep_minutes(list(prep.values()))
-        out[dev] = {"nights": len(nights), "days": days, "prep_min": m, "prep_nights": len(prep) if m else 0}
+        out[dev] = {"nights": len(nights), "days": days, "prep_min": m, "prep_nights": len(prep) if m else 0,
+                    "night_list": sorted(str(n) for n in nights)}     # which nights: counted again after an undo
     return out
 
 

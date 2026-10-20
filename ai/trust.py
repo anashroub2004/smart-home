@@ -6,7 +6,10 @@
 
 A "no" or an undo (you reversed it within 10 min) moves it one level down and resets the count, so it learns
 in both directions. History counts too: switching the light off yourself after lying down on >= 5 of the last
-28 nights starts the ladder at level 1 (from_history) — until the first "no" / undo. Unanswered questions change nothing. Pure functions on a plain dict (saved in state.json).
+28 nights starts the ladder at level 1 (from_history) — until the first "no" / undo. After that the history counts
+again only from the nights AFTER that "no": switching it off yourself on 3 of them (HISTORY_BACK_NIGHTS) brings
+level 1 back, so one night of reading in bed does not cancel a month of habit for good.
+Unanswered questions change nothing. Pure functions on a plain dict (saved in state.json).
 
 Kinds of decision:
     off_still   switch a light off while you rest (radar sees you, PIR quiet, light usually off now)
@@ -26,8 +29,8 @@ def level(state, dev, kind):
     return ((state.get("trust") or {}).get(dev) or {}).get(kind, {}).get("level", S.TRUST_ASK)
 
 
-def answered(state, dev, kind, yes):
-    """-> (old_level, new_level)."""
+def answered(state, dev, kind, yes, night=None):
+    """-> (old_level, new_level). night: the night of a "no" (ISO date) — history counts again after it."""
     e = entry(state, dev, kind)
     old = e["level"]
     if yes:
@@ -36,17 +39,30 @@ def answered(state, dev, kind, yes):
             e.update(level=S.TRUST_NOTIFY, yes=0, ok=0)
     else:
         e.update(level=max(S.TRUST_ASK, e["level"] - 1), yes=0, ok=0)
-        e["history_off"] = True          # you said no: from now on only your answers count, not the history
+        e["history_off"] = True          # you said no: the history before tonight no longer counts
+        e["history_off_night"] = str(night) if night else None   # None = never again (answers only)
     return old, e["level"]
 
 
-def from_history(state, dev, kind, nights):
+def from_history(state, dev, kind, nights, night_list=None):
     """History counts as answers: if you switched it off yourself on enough nights, start at NOTIFY (it does it and
-    tells you, undo = no) instead of asking. Never after you said no / undid it. -> True when it moved up."""
+    tells you, undo = no) instead of asking. After a no / undo only the nights after it count, and
+    HISTORY_BACK_NIGHTS of them are enough. -> True when it moved up."""
     e = entry(state, dev, kind)
-    if e["level"] != S.TRUST_ASK or e.get("history_off") or nights < S.SELF_OFF_MIN_NIGHTS:
+    if e["level"] != S.TRUST_ASK:
         return False
-    e.update(level=S.TRUST_NOTIFY, yes=0, ok=0, source="history", nights=int(nights))
+    if e.get("history_off"):
+        since = e.get("history_off_night")
+        after = sum(1 for n in (night_list or []) if since and n > since)
+        if after < S.HISTORY_BACK_NIGHTS:
+            return False
+        e.pop("history_off")
+        e.pop("history_off_night", None)
+        e.update(level=S.TRUST_NOTIFY, yes=0, ok=0, source="history", nights=after, back=True)
+        return True
+    if nights < S.SELF_OFF_MIN_NIGHTS:
+        return False
+    e.update(level=S.TRUST_NOTIFY, yes=0, ok=0, source="history", nights=int(nights), back=False)
     return True
 
 
@@ -60,8 +76,8 @@ def acted_ok(state, dev, kind):
     return old, e["level"]
 
 
-def undone(state, dev, kind):
-    return answered(state, dev, kind, False)
+def undone(state, dev, kind, night=None):
+    return answered(state, dev, kind, False, night)
 
 
 def summary(state, labels=None):
