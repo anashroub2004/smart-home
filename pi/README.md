@@ -5,6 +5,20 @@
 | `firebase_writer.py` | **كل** كتابة إلى Firebase تمر من هنا (المحاكي والـ Pi يستخدمان نفس الملف) |
 | `rest_db.py` | عميل بسيط لـ Realtime Database عبر REST (مكتبة Python القياسية فقط) |
 | `sim_house.py` | محاكي البيت: يتصرف تماماً مثل الـ Pi حتى نبني الويب قبل وصول القطع |
+| `fake_nodes.py` | 3 عقد ESP32 وهمية على MQTT (`living`، `bedroom`، `door`) تتكلم رسائل `docs/contract.md` بالضبط. الغرف والحساسات والأجهزة من `/config`. تُستبدل بالعقد الحقيقية واحدة واحدة |
+
+## العقد الوهمية (المرحلة 1)
+
+يحتاج Mosquitto (على Windows: `winget install --id EclipseFoundation.Mosquitto --source winget`، يعمل كخدمة تلقائياً) و`pip install "paho-mqtt>=2.0,<3"`.
+
+```bash
+# نافذة 1: كل ما تقوله العقد
+"C:\Program Files\mosquitto\mosquitto_sub.exe" -h localhost -t "home/#" -v
+
+# نافذة 2: العقد (اكتب help لترى الأوامر: press، move، finger، unplug ...)
+python pi/fake_nodes.py
+python pi/fake_nodes.py --only living --broken bathroom/temp
+```
 
 ## تشغيل المحاكي
 
