@@ -289,6 +289,7 @@ class House:
         self.off_alerted = set()         # monitor-only devices we already alerted about
         self.node_version = {}           # node -> config version it confirmed
         self.door_entry_at = None        # last time someone came in (fingerprint / keypad / app)
+        self.door_exit_at = None         # last time someone went out (exit button)
         self.away = False                # Away scene on
         self.faults = dict(f.split(":", 1) if ":" in f else (f, "high") for f in (args.fault or []))
         self.ai = None                   # ai.runtime.AIRuntime (the real model) — set by start_ai()
@@ -636,6 +637,8 @@ class House:
             self.door_entry_at = CLOCK.now()
             if self.ai and self.ai.recorder:
                 self.ai_safe(self.ai.recorder.event, "door/entry")
+        elif method == "exit_button":
+            self.door_exit_at = CLOCK.now()
         self.lock_at = CLOCK.now() + 5
 
     def fingerprints(self):
@@ -811,7 +814,7 @@ class House:
     # ------------------------------------------------ AI (the real model from ai/)
     def house_snapshot(self):
         return {"rooms": self.rooms, "devices": self.devices, "paused": self.ai_pause,
-                "door_entry_at": self.door_entry_at, "away": self.away}
+                "door_entry_at": self.door_entry_at, "door_exit_at": self.door_exit_at, "away": self.away}
 
     def history_of(self):
         """What the simulated history was made from: the routine file + the AI devices of /config."""

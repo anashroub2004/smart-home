@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from ai import gate
 from person import OUT
 
 
@@ -385,26 +386,56 @@ class ScenarioRunner:
         self.h.rules_off.add(spec.id)
         if self.h.devices[spec.id]["v"]:
             self.set_dev(spec.id, 0)
+        # leftovers of an earlier run (a question still open, or the 30 min pause after an unanswered one) would
+        # make the AI stay silent for reasons that have nothing to do with this test
+        for sid in [s for s, sg in self.ai.suggestions.items() if sg["device"] == spec.id]:
+            sg = self.ai.closed[sid] = self.ai.suggestions.pop(sid)
+            self.ai.sink.expire_suggestion(sid, spec.id, sg["title"], "test scenario", quiet=True)
+        self.ai.snooze.pop(spec.id, None)
+        c["entry_before"] = self.h.door_entry_at
         self.h.person.take_over(spec.room, "Relaxing")
         self.h.temp_delta += max(0.0, (spec.temp_on or 28) + 2 - (self.h.rooms.get(spec.room, {}).get("temp") or 25))
-        self.h.update_sensors()
-        c["sid"] = self.ai.force_suggestion(spec.id, "suggest_on", 0.65, self.h.house_snapshot())
-        c["step"] = "the AI asks: turn the fan on?" if c["sid"] else "the AI did not ask"
+        c["step"] = "you walk into the room"     # the person moves on the next tick: ask once the sensors see you
+
+    def ask_suggestion_expiry(self, c, m):
+        """Stage 0: wait until you are really in the room, then let the AI ask through the normal path."""
+        if self.h.ai_training():
+            return None
+        spec = self.ai.specs[c["dev"]]
+        if self.h.person.room != spec.room or not gate.room_occupied(self.h.rooms.get(spec.room)):
+            return (False, "you never reached the room") if m > 3 else None
+        if self.h.door_entry_at != c["entry_before"]:
+            self.h.door_entry_at = c["entry_before"]   # the scenario walked you in: not a real arrival
+        house = self.h.house_snapshot()
+        c["sid"] = self.ai.force_suggestion(spec.id, "suggest_on", 0.65, house)
+        if not c["sid"]:
+            now = self.now()
+            if any(sg["device"] == spec.id for sg in self.ai.suggestions.values()):
+                why = "a question was already open"
+            elif now < self.ai.snooze.get(spec.id, 0):
+                why = "the fan's questions were paused"
+            else:
+                rooms = house.get("rooms") or {}
+                why = gate.check_on(spec, rooms.get(spec.room) or {}, self.ai.someone_home(house, now),
+                                    self.ai.th.get("light_on_lux", 150), *self.ai.env(spec, rooms))[1]
+            return False, f"the AI refused to ask ({why})"
+        c["stage"], c["asked"] = 1, m
+        c["step"] = "the AI asks: turn the fan on?"
 
     def check_suggestion_expiry(self, c, m):
-        if not c.get("sid"):
-            return False, "the AI refused to ask (sensors disagreed)"
+        if c["stage"] == 0:
+            return self.ask_suggestion_expiry(c, m)
         st = self.h.devices[c["dev"]]
         if st["v"]:
             return False, (f"the fan was switched on by {st.get('src')} at {m:.1f} min, so the question was never "
                            f"tested (it must stay open until you leave)")
-        if c["stage"] == 0 and c["sid"] not in self.ai.suggestions:
-            return False, f"question gone after {m:.1f} min while you were still in the room"
-        if c["stage"] == 0 and m >= 1:
-            c["stage"], c["left"] = 1, m
+        if c["stage"] == 1 and c["sid"] not in self.ai.suggestions:
+            return False, f"question gone after {m - c['asked']:.1f} min while you were still in the room"
+        if c["stage"] == 1 and m - c["asked"] >= 1:
+            c["stage"], c["left"] = 2, m
             self.h.person.take_over(OUT)
             c["step"] = "you left home"
-        if c["stage"] == 1:
+        if c["stage"] == 2:
             if c["sid"] not in self.ai.suggestions:
                 return True, f"question withdrawn {m - c['left']:.1f} min after you left (the room changed)"
             if m - c["left"] > 5:

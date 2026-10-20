@@ -19,6 +19,7 @@ Priority: manual > safety > rules > AI.
     devices {id: {v, level?, watts?, src?}}
     paused  {id: until_ms}           (/ai_pause from the app)
     door_entry_at  unix seconds of the last front-door entry (or None)
+    door_exit_at   unix seconds of the last exit through the front door (exit button, or None)
     away    True while the Away scene is on
 """
 from __future__ import annotations
@@ -157,6 +158,8 @@ class AIRuntime:
         """temperature / light for a device, borrowed from another room when its own room has no sensor."""
         temp = gate.value(rooms.get(spec.temp.split("/")[0]), "temp") if spec.temp else None
         lux = gate.value(rooms.get(spec.lux.split("/")[0]), "lux") if spec.lux else None
+        if lux is None and (self.config["rooms"].get(spec.room) or {}).get("windowless"):
+            lux = 0             # no window and no light sensor: always dark (same as the Pi's room_lux)
         return temp, lux
 
     def thresholds(self, spec, hour, drift=False):
@@ -191,7 +194,9 @@ class AIRuntime:
         rooms = house.get("rooms") or {}
         if any(gate.room_occupied(rooms.get(r)) for r in visible_rooms(self.config)):
             return True
-        entry = house.get("door_entry_at")
+        entry, out = house.get("door_entry_at"), house.get("door_exit_at")
+        if entry and out and out >= entry:
+            return False                  # went out after the last entry, and no sensor sees anyone
         return bool(entry and now - entry < self.minutes(S.HOME_RECENT_ENTRY_MIN))
 
     # ------------------------------------------------------------------ training
