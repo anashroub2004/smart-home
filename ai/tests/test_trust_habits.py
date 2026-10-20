@@ -155,22 +155,34 @@ class Runtime(unittest.TestCase):
         rt2.tick(lying(), NOW + 11 * 60, dt=60)
         self.assertTrue(asked(rt2))
 
-    def test_undo_tonight_means_no_second_try_tonight(self):
+    def test_undo_tonight_one_retry_after_an_hour_still(self):
         rt, sink = self.rt(use=0.05)
         trust.from_history(rt.state, "bedroom_light", "off_still", 9)          # it acts and tells you
         on = {"bedroom_light": {"v": 1, "src": "rule", "watts": 1.2}}
         lying = lambda: house({"bedroom": 1}, pir={"bedroom": 0}, devices=on)
+        off = lambda acts: ("bedroom_light", 0) in [(a["device"], a["v"]) for a in acts]
         rt.tick(lying(), NOW, dt=60)
-        acts = rt.tick(lying(), NOW + 11 * 60, dt=60)
-        self.assertIn(("bedroom_light", 0), [(a["device"], a["v"]) for a in acts])
+        self.assertTrue(off(rt.tick(lying(), NOW + 11 * 60, dt=60)))
         rt.on_manual("bedroom_light", now=NOW + 12 * 60, v=1)                  # reading on the phone: undo
         rt.override_at.pop("bedroom_light")                                   # (past the 2 h hands-off)
         t = NOW + 13 * 60
         rt.quiet_since.clear()
-        for k in range(0, 40 * 60, 60):                                        # still lying there tonight
+        for k in range(0, 55 * 60, 60):                                        # still reading: no second try yet
             acts = rt.tick(lying(), t + k, dt=60)
             self.assertNotIn("bedroom_light", [a["device"] for a in acts])
             self.assertFalse(rt.suggestions)
+        n_alerts = len(sink.alerts)
+        acts = rt.tick(lying(), NOW + 12 * 60 + (S.RETRY_STILL_MIN + 1) * 60, dt=60)   # an hour still: asleep
+        self.assertTrue(off(acts))                                             # one more try, no question
+        self.assertFalse(rt.suggestions)
+        self.assertGreater(len(sink.alerts), n_alerts)                         # ... and it tells you
+        self.assertIn("seem asleep", next(a for a in acts if a["device"] == "bedroom_light")["why"])
+        t2 = NOW + 12 * 60 + (S.RETRY_STILL_MIN + 2) * 60
+        rt.on_manual("bedroom_light", now=t2, v=1)                             # undone again: done for tonight
+        rt.override_at.pop("bedroom_light")
+        rt.quiet_since.clear()
+        for k in range(60, 3 * 3600, 300):
+            self.assertFalse(off(rt.tick(lying(), t2 + k, dt=60)))
         t = NOW + 86400                                                        # the next night
         rt.quiet_since.clear()
         rt.tick(lying(), t, dt=60)
