@@ -73,11 +73,12 @@ def main():
     ap.add_argument("--step", type=float, default=10.0, help="virtual seconds per step (default 10)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--verbose", action="store_true", help="print every AI action, question, answer and manual press")
+    ap.add_argument("--name", default="", help="run several at once: each gets its own models/db/report, e.g. --name a")
     a = ap.parse_args()
     import random
     random.seed(a.seed)
 
-    name = "curve_rules" if a.no_ai else "curve_ai"
+    name = ("curve_rules" if a.no_ai else "curve_ai") + (f"_{a.name}" if a.name else "")
     shutil.rmtree(ROOT / "ai" / "models" / name, ignore_errors=True)       # always a brand-new hub
     for ext in ("", "-wal", "-shm"):
         (ROOT / "ai" / "data" / f"{name}.db{ext}").unlink(missing_ok=True)
@@ -130,7 +131,8 @@ def main():
     rows = house.kpi_view()[1:-1]                    # whole days only
     trust = house.ai.state.get("trust") if house.ai else {}
     REPORTS.mkdir(parents=True, exist_ok=True)
-    stem = REPORTS / f"learning_curve_{datetime.now():%Y%m%d_%H%M}_{'rules' if a.no_ai else 'ai'}"
+    stem = REPORTS / (f"learning_curve_{datetime.now():%Y%m%d_%H%M}_{'rules' if a.no_ai else 'ai'}"
+                      + (f"_{a.name}" if a.name else ""))
     stem.with_suffix(".json").write_text(json.dumps({"days": rows, "trust": trust, "args": vars(a)}, indent=2))
     write_report(stem, rows, trust, a.no_ai, a.days, a.seed)
     print(f"\nreport: {stem}.md  ({time.time() - t0:.0f} s)")

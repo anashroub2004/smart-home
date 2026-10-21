@@ -75,7 +75,7 @@ class AIRuntime:
         self.quiet_since = {}     # room -> ts the PIR went quiet while the radar still sees someone
         self.left_at = {}         # room -> ts the last person left it (a short night trip back = no light)
         self.undo_night = {}      # device -> {night, n, at}: you undid "light off while you rest" tonight (n times);
-                                  # one more try after RETRY_STILL_MIN of stillness, none after a second undo
+                                  # one more try RETRY_AFTER_MIN later once quiet again, none after a second undo
         self.auto = {}            # device -> {at, v, kind} automatic action that you may still undo
         self.closed = {}          # suggestion id -> info of a closed suggestion (an answer can arrive late)
         self.house_rooms = {}     # latest room readings (for borrowed temperature / light)
@@ -694,9 +694,11 @@ class AIRuntime:
             retry = bool(undo) and undo["night"] == night_of(now)
             if retry and undo["n"] >= 2:
                 continue                                   # you undid it twice tonight: not again before tomorrow
-            # you undid it tonight (reading?): one more try only after a long stillness since then — asleep
-            start, need = (max(quiet, undo["at"]), S.RETRY_STILL_MIN) if retry else (quiet, prep or S.STILL_OFF_MIN)
-            if now - start < self.minutes(need):
+            # you undid it tonight (reading?): one more try an hour later, once you are quiet again — asleep
+            if retry and now - undo["at"] < self.minutes(S.RETRY_AFTER_MIN):
+                continue
+            start = max(quiet, undo["at"]) if retry else quiet
+            if now - start < self.minutes(S.STILL_OFF_MIN if retry else prep or S.STILL_OFF_MIN):
                 continue
             if now < self.snooze.get(dev, 0) or any(sg["device"] == dev for sg in self.suggestions.values()):
                 continue
@@ -711,8 +713,9 @@ class AIRuntime:
                 n = ((self.habits.get("self_off") or {}).get(dev) or {}).get("prep_nights", 0)
                 why += f" · you usually switch it off yourself about {prep:g} min after lying down ({n} nights)"
             if retry:                                      # a question would wake nobody: act, undo stays possible
-                why += (f" · you switched it back on earlier tonight, but you have not moved for {still_min} min "
-                        f"since — you seem asleep now")
+                ago = round((now - undo["at"]) / 60 * self.speed)
+                why += (f" · you switched it back on {ago} min ago, and now you have not moved for {still_min} min "
+                        f"— you seem asleep now")
             lvl = trust.level(self.state, dev, "off_still")
             if lvl == S.TRUST_ASK and not retry:
                 self.ask(dev, spec, "off", "off_still", 1 - u, why, rooms.get(spec.room) or {}, now,

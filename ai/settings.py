@@ -58,8 +58,9 @@ HABIT_OFF_AT = 0.50                      # light on while you rest: only if it i
                                          # 10 min without movement in a room where you usually rest is the main signal
 REST_AT = 0.80                           # "usually resting here now": the PIR was quiet in >= 80% of occupied slots
 STILL_OFF_MIN = 10                       # the PIR must also be quiet right now for 10 min (radar still sees you)
-RETRY_STILL_MIN = 60                     # you switched it back on tonight (reading): one more try once you have been
-                                         #     still for 60 min since (longest still reading seen: 44 min) — asleep
+RETRY_AFTER_MIN = 60                     # you switched it back on tonight (reading): one more try once 60 min have
+                                         #     passed since AND the PIR is quiet for STILL_OFF_MIN now — asleep. Not
+                                         #     60 min of unbroken stillness: a sleeper turns over every ~10 min
 ENTRY_WINDOW_S = 120                     # the AI decides about the light within 2 min of you walking in
 HABIT_MIN_DAYS = 7                       # a habit table needs at least a week of history
 TRUST_ASK, TRUST_NOTIFY, TRUST_SILENT = 0, 1, 2
