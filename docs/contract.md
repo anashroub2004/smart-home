@@ -44,7 +44,7 @@
   },
   "thresholds": { "fan_on_temp": 28, "fan_off_temp": 26.5, "light_on_lux": 150, "empty_room_off_min": 10,
                   "ai_act_at": 0.8, "ai_suggest_at": 0.6, "override_pause_min": 120,
-                  "door_lockout_attempts": 5, "door_lockout_s": 60 },
+                  "door_lockout_attempts": 5, "door_lockout_s": 60, "pir_hold_s": 300 },
   "scenes": { "sleep": { "name": "Sleep", "order": 3, "set": { "bedroom_fan": { "v": 1, "level": 40 } } } }
 }
 ```
@@ -215,10 +215,10 @@
 | Topic | الاتجاه | مثال |
 |---|---|---|
 | `home/<room>/<sensor>` | ESP32 → Pi | `home/living/temp` → `29.1` |
-| `home/<room>/<device>/state` | ESP32 → Pi | `{"v":1,"level":70,"src":"button"}` |
-| `home/<room>/<device>/set` | Pi → ESP32 | `{"v":1,"level":70}` أو `{"v":1,"mode":"Cool"}` |
+| `home/<room>/<device>/state` | ESP32 → Pi | `{"v":1,"level":70,"src":"button"}` — بعد `set` تعيد العقدة `src` الذي وصلها كما هو (2026-10-21) |
+| `home/<room>/<device>/set` | Pi → ESP32 | `{"v":1,"level":70,"src":"ai"}` أو `{"v":1,"mode":"Cool","src":"web"}` — `src` (اختياري) = من طلب التغيير (`web` · `ai` · `rule` · `scene` …)، العقدة لا تفهمه بل تنسخه في ردها |
 | `home/<room>/<device>/power` | ESP32 → Pi | `{"w":2.9}` — قراءة INA226 (لكل الأجهزة، ومنها تُستنتج حالة أجهزة المراقبة، ويستخدمها الـ AI لكشف الأعطال والهدر) |
-| `home/<room>/mmwave` و `home/<room>/pir` | ESP32 → Pi | `0`/`1` لكل حساس وجود على حدة (الإطفاء الذكي يحتاج الاثنين فارغين) |
+| `home/<room>/mmwave` و `home/<room>/pir` | ESP32 → Pi | `0`/`1` لكل حساس وجود على حدة (الإطفاء الذكي يحتاج الاثنين فارغين). الـ Pi يحسب `occ`: غرفة فيها رادار = الرادار أو الـ PIR، وغرفة PIR فقط = حركة في آخر `thresholds.pir_hold_s` ثانية (افتراضياً 300) |
 | `home/door/event` | ESP32 → Pi | `{"type":"fingerprint","ok":true,"id":2}` |
 | `home/door/open` | Pi → ESP32 | `{}` |
 | `home/entrance/door_lock/state` | ESP32 → Pi | `{"v":1,"src":"fingerprint"}` = القفل مفتوح، `{"v":0,"src":"system"}` = أُغلق من جديد بعد `caps.lock.open_s` ثانية. نفس رسالة `state` لأي جهاز (2026-10-21) |

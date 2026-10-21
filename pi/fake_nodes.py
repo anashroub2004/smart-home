@@ -172,16 +172,16 @@ class FakeNode:
             return
         self.sent.clear()                                   # send everything again after a reconnect
         self.publish(f"home/{self.name}/status", "online", retain=True, force=True)
-        self.subscribe_all(client)
+        client.subscribe(f"home/{self.name}/config", qos=1)  # once: re-subscribing would get the retained copy again
+        self.subscribe_devices(client)
         for dev in self.devices:                           # tell the Pi what everything is doing right now
             self.publish_state(dev)
 
-    def subscribe_all(self, client):
-        """Listen to this node's config and to the /set of each device it drives (and the door's open)."""
+    def subscribe_devices(self, client):
+        """Listen to the /set of each device this node drives (and the door's open)."""
         for t in getattr(self, "subs", []):
             client.unsubscribe(t)
-        self.subs = [f"home/{self.name}/config"]
-        self.subs += [f"home/{d['room']}/{dev}/set" for dev, d in self.devices.items() if self.writable(dev)]
+        self.subs = [f"home/{d['room']}/{dev}/set" for dev, d in self.devices.items() if self.writable(dev)]
         if self.lock_dev():
             self.subs.append("home/door/open")
         for t in self.subs:
@@ -200,17 +200,18 @@ class FakeNode:
             if "rooms" not in cfg:
                 say(self.name, "!!", msg.topic, "has no rooms — ignored")
                 return
-            self.apply_config(cfg)
+            if cfg.get("version") != self.version:         # the same version again (Pi restarted): only ack
+                self.apply_config(cfg)
+                self.subscribe_devices(client)             # a device may have been added or removed
+                for dev in self.devices:
+                    self.publish_state(dev)
             self.publish(f"home/{self.name}/config/ack", json.dumps({"version": self.version}), force=True)
-            self.subscribe_all(client)                     # a device may have been added or removed
-            for dev in self.devices:
-                self.publish_state(dev)
         elif msg.topic == "home/door/open":
-            self.open_lock()
+            self.open_lock(src=body.get("src") or "web")
         elif msg.topic.endswith("/set"):
             dev = msg.topic.split("/")[2]
             if dev in self.devices and self.writable(dev):
-                self.switch(dev, body)
+                self.switch(dev, body, src=body.get("src"))     # the node does not interpret src: it echoes it
 
     # ------------------------------------------------ publishing
     def publish(self, topic, payload, retain=False, force=False):
@@ -254,8 +255,8 @@ class FakeNode:
             on_above = float((cfg.get("hw") or {}).get("on_above_w", 0.5))
             if time.time() < d["busy_until"]:
                 return max(rated, on_above * 4)
-            if cfg.get("icon") == "fridge":                     # the compressor runs ~1/3 of the time
-                return max(rated, on_above * 4) if (time.time() // 600) % 3 == 0 else 0.1
+            if cfg.get("icon") == "fridge":                     # always on: the compressor makes it go up and down
+                return max(rated, on_above * 2) * (1.5 if (time.time() // 600) % 3 == 0 else 1.0)
             return 0.0
         return 0.0
 

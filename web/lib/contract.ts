@@ -108,6 +108,7 @@ export interface Thresholds {
   override_pause_min: number;
   door_lockout_attempts: number;
   door_lockout_s?: number;
+  pir_hold_s?: number; // a PIR-only room counts as occupied this long after the last motion (Pi side)
 }
 
 export interface HomeConfig {

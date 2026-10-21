@@ -37,6 +37,12 @@ class Writer:
         """state: rooms, devices, power_w, base_w, scene, door — see contract.md"""
         self.db.put("home_state", {**state, "updated_at": now_ms()})
 
+    def patch_home_state(self, parts):
+        """Update only some parts of /home_state, so services do not erase each other (mqtt_ingest writes
+        rooms + devices, security.py the door, automation the scene). parts may use paths:
+        {"rooms/living": {...}, "devices/living_fan": {...}, "power_w": 10.6}"""
+        self.db.patch("home_state", {**parts, "updated_at": now_ms()})
+
     def patch_device(self, device, state):
         self.db.patch(f"home_state/devices/{device}", state)
 
