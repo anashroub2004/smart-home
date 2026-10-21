@@ -221,9 +221,20 @@
 | `home/<room>/mmwave` و `home/<room>/pir` | ESP32 → Pi | `0`/`1` لكل حساس وجود على حدة (الإطفاء الذكي يحتاج الاثنين فارغين) |
 | `home/door/event` | ESP32 → Pi | `{"type":"fingerprint","ok":true,"id":2}` |
 | `home/door/open` | Pi → ESP32 | `{}` |
+| `home/entrance/door_lock/state` | ESP32 → Pi | `{"v":1,"src":"fingerprint"}` = القفل مفتوح، `{"v":0,"src":"system"}` = أُغلق من جديد بعد `caps.lock.open_s` ثانية. نفس رسالة `state` لأي جهاز (2026-10-21) |
 | `home/<node>/status` | LWT | `online` / `offline` (retained) |
-| `home/<node>/config` | Pi → ESP32 | الجزء الخاص بالعقدة من `/config` (retained) |
+| `home/<node>/config` | Pi → ESP32 | غرف هذه العقدة فقط من `/config` مع رقم النسخة (retained) — الشكل تحت الجدول |
 | `home/<node>/config/ack` | ESP32 → Pi | `{"version":3}` → يُكتب في `/nodes/<node>/config_version` |
+
+**شكل `home/<node>/config` (2026-10-21):** الغرف التي `node` فيها = هذه العقدة، كما هي في `/config` (بأجهزتها وحساساتها و`hw`)، و`version` من `/config/version`:
+
+```json
+{ "version": 3,
+  "rooms": { "bedroom":  { "node": "bedroom", "sensors": ["temp","hum","lux","occ"], "hardware": ["C1001 mmWave","PIR","SHT31","BH1750","INA226"], "devices": { "bedroom_light": { "caps": {...}, "control": {...}, "hw": {"out":"relay","pin":26,"button":33,"ina":"0x41"}, ... } } },
+             "bathroom": { "node": "bedroom", "windowless": true, "sensors": ["occ","temp","hum"], "devices": { ... } } } }
+```
+
+العقدة تعمل بالنسخة الجديدة ثم ترد بـ `config/ack`. إن لم يصل `ack`، فالعقدة ما زالت على النسخة القديمة (أو مفصولة). المرجع العملي: `pi/fake_nodes.py`.
 
 ## SQLite على الـ Pi (مدخلات الـ AI — البيانات الخام لا تخرج من البيت)
 
