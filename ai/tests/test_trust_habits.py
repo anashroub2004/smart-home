@@ -62,19 +62,31 @@ class Runtime(unittest.TestCase):
         rt.habits = {"use": {d: flat(use) for d in rt.specs}, "rest": {"bedroom": flat(rest), "living": flat(rest)}}
         return rt, sink
 
-    def test_entry_in_the_dark_follows_the_habit(self):
+    def test_entry_in_the_dark_switches_the_light_on(self):
         rt, sink = self.rt(use=0.9)
         self.assertTrue(rt.handles_entry("bedroom_light"))
         rt.tick(house({}), NOW, dt=10)
         acts = rt.tick(house({"bedroom": 1}, lux=10), NOW + 10, dt=10)
-        self.assertIn(("bedroom_light", 1), [(a["device"], a["v"]) for a in acts])
-        rt2, sink2 = self.rt(use=0.05)                             # going to sleep: you usually keep it off
+        self.assertIn(("bedroom_light", 1, "AI · habit 90%"), [(a["device"], a["v"], a["src_label"]) for a in acts])
+        # going to bed, the light is usually off by now: it still switches it on (Iyad's decision 2026-10-19);
+        # the learned "getting ready" time switches it off once you lie still
+        rt2, sink2 = self.rt(use=0.05)
         rt2.tick(house({}), NOW, dt=10)
         acts = rt2.tick(house({"bedroom": 1}, lux=10), NOW + 10, dt=10)
-        self.assertNotIn("bedroom_light", [a["device"] for a in acts])
-        self.assertTrue(any("left off" in e["title"] for e in sink2.events))
+        self.assertIn(("bedroom_light", 1, "AI · dark room"), [(a["device"], a["v"], a["src_label"]) for a in acts])
         acts = rt2.tick(house({"bedroom": 1}, lux=10), NOW + 20, dt=10)   # one decision per entry
-        self.assertEqual(sum("left off" in e["title"] for e in sink2.events), 1)
+        self.assertNotIn("bedroom_light", [a["device"] for a in acts])
+
+    def test_back_to_bed_at_night_leaves_the_light_off(self):
+        rt, sink = self.rt(use=0.05)                               # you usually sleep in the bedroom now
+        rt.tick(house({"bedroom": 1}, lux=1, devices={"bedroom_light": {"v": 1}}), NOW, dt=60)
+        rt.tick(house({"bathroom": 1}, lux=1), NOW + 60, dt=60)                 # 3 am: to the bathroom
+        acts = rt.tick(house({"bedroom": 1}, lux=1), NOW + 6 * 60, dt=60)       # back after 5 min
+        self.assertNotIn("bedroom_light", [a["device"] for a in acts])
+        self.assertTrue(any("left off" in e["title"] for e in sink.events))
+        rt.tick(house({"bathroom": 1}, lux=1), NOW + 7 * 60, dt=60)
+        acts = rt.tick(house({"bedroom": 1}, lux=1), NOW + 30 * 60, dt=60)      # away 23 min: not a short trip
+        self.assertIn(("bedroom_light", 1), [(a["device"], a["v"]) for a in acts])
 
     def test_entry_in_a_windowless_room_decides(self):
         # the bathroom has no window and no BH1750: it is dark, not "waiting for a reading"
@@ -83,10 +95,10 @@ class Runtime(unittest.TestCase):
         rt.tick(house({}), NOW, dt=10)
         acts = rt.tick(house({"bathroom": 1}), NOW + 10, dt=10)
         self.assertIn(("bathroom_light", 1), [(a["device"], a["v"]) for a in acts])
-        rt2, sink2 = self.rt(use=0.05)
+        rt2, sink2 = self.rt(use=0.05)                             # even when you usually keep it off now
         rt2.tick(house({}), NOW, dt=10)
-        rt2.tick(house({"bathroom": 1}), NOW + 10, dt=10)
-        self.assertTrue(any("left off" in e["title"] for e in sink2.events))
+        acts = rt2.tick(house({"bathroom": 1}), NOW + 10, dt=10)
+        self.assertIn(("bathroom_light", 1), [(a["device"], a["v"]) for a in acts])
 
     def test_going_out_ends_the_door_entry_window(self):
         rt, _ = self.rt(use=0.9)
@@ -123,6 +135,62 @@ class Runtime(unittest.TestCase):
         rt.on_manual("bedroom_light", now=t + 60, v=1)             # you switch it back on: "that was wrong"
         self.assertEqual(trust.level(rt.state, "bedroom_light", "off_still"), S.TRUST_ASK)
 
+    def test_learned_prep_time_replaces_the_fixed_ten_minutes(self):
+        on = {"bedroom_light": {"v": 1, "src": "ai", "watts": 1.2}}
+        lying = lambda: house({"bedroom": 1}, pir={"bedroom": 0}, devices=on)
+        asked = lambda rt: any(sg.get("kind") == "off_still" for sg in rt.suggestions.values())
+        rt, _ = self.rt(use=0.05)
+        rt.habits["self_off"] = {"bedroom_light": {"nights": 6, "prep_min": 4.0, "prep_nights": 6}}
+        rt.tick(lying(), NOW, dt=60)
+        rt.tick(lying(), NOW + 3 * 60, dt=60)
+        self.assertFalse(asked(rt))
+        rt.tick(lying(), NOW + 5 * 60, dt=60)                      # 5 min still > your 4 min
+        self.assertTrue(asked(rt))
+        self.assertIn("about 4 min after lying down (6 nights)",
+                      next(iter(rt.suggestions.values()))["title"] + rt.sink.suggestions[next(iter(rt.suggestions))]["why"])
+        rt2, _ = self.rt(use=0.05)                                 # not learned yet: the fixed 10 min
+        rt2.tick(lying(), NOW, dt=60)
+        rt2.tick(lying(), NOW + 5 * 60, dt=60)
+        self.assertFalse(asked(rt2))
+        rt2.tick(lying(), NOW + 11 * 60, dt=60)
+        self.assertTrue(asked(rt2))
+
+    def test_undo_tonight_one_retry_an_hour_later_once_quiet(self):
+        rt, sink = self.rt(use=0.05)
+        trust.from_history(rt.state, "bedroom_light", "off_still", 9)          # it acts and tells you
+        on = {"bedroom_light": {"v": 1, "src": "rule", "watts": 1.2}}
+        lying = lambda pir=0: house({"bedroom": 1}, pir={"bedroom": pir}, devices=on)
+        off = lambda acts: ("bedroom_light", 0) in [(a["device"], a["v"]) for a in acts]
+        rt.tick(lying(), NOW, dt=60)
+        self.assertTrue(off(rt.tick(lying(), NOW + 11 * 60, dt=60)))
+        undo = NOW + 12 * 60
+        rt.on_manual("bedroom_light", now=undo, v=1)                           # reading on the phone: undo
+        rt.override_at.pop("bedroom_light")                                   # (past the 2 h hands-off)
+        rt.quiet_since.clear()
+        # he reads, then falls asleep and turns over now and then (never 60 min without any movement)
+        turns = {8, 19, 27, 41, 52, 63, 70}
+        for m in range(1, 80):                                                 # last turn at 70: quiet 10 min at 80
+            acts = rt.tick(lying(1 if m in turns else 0), undo + m * 60, dt=60)
+            self.assertFalse(off(acts), f"minute {m}")
+            self.assertFalse(rt.suggestions)
+        n_alerts = len(sink.alerts)
+        acts = rt.tick(lying(), undo + 81 * 60, dt=60)                         # > 1 h since the undo + quiet 10 min
+        self.assertTrue(off(acts))                                             # one more try, no question
+        self.assertFalse(rt.suggestions)
+        self.assertGreater(len(sink.alerts), n_alerts)                         # ... and it tells you
+        self.assertIn("seem asleep", next(a for a in acts if a["device"] == "bedroom_light")["why"])
+        t2 = undo + 82 * 60
+        rt.on_manual("bedroom_light", now=t2, v=1)                             # undone again: done for tonight
+        rt.override_at.pop("bedroom_light")
+        rt.quiet_since.clear()
+        for k in range(60, 3 * 3600, 300):
+            self.assertFalse(off(rt.tick(lying(), t2 + k, dt=60)))
+        t = NOW + 86400                                                        # the next night
+        rt.quiet_since.clear()
+        rt.tick(lying(), t, dt=60)
+        rt.tick(lying(), t + 11 * 60, dt=60)
+        self.assertTrue(rt.suggestions)                                        # level went down: it asks again
+
     def test_sitting_still_is_not_resting(self):
         rt, sink = self.rt(use=0.05, rest=0.6)                     # e.g. TV: you sit still but this is not sleep
         on = {"living_light": {"v": 1, "src": "rule", "watts": 1.2}}
@@ -130,6 +198,25 @@ class Runtime(unittest.TestCase):
             acts = rt.tick(house({"living": 1}, pir={"living": 0}, devices=on), NOW + k, dt=60)
             self.assertEqual(acts, [])
         self.assertFalse(sink.suggestions)
+
+
+class PrepTime(unittest.TestCase):
+    def test_median_plus_margin_within_limits(self):
+        self.assertIsNone(habits.prep_minutes([10] * 4))                       # fewer than 5 nights
+        self.assertEqual(habits.prep_minutes([8, 10, 12, 40, 9]), 12.0)        # median 10 + 2, one odd night ignored
+        self.assertEqual(habits.prep_minutes([0.5] * 5), 2.5)
+        self.assertEqual(habits.prep_minutes([1] * 5), 3.0)
+        self.assertEqual(habits.prep_minutes([30] * 5), 20.0)                  # upper limit
+        self.assertEqual(habits.prep_minutes([0] * 5), 2.0)                    # lower limit
+
+    def test_still_before_the_press(self):
+        from ai import store
+        con = memory_db()
+        t = 1_800_000_000
+        store.write(con, [(t - 900, "bedroom/pir", 1), (t - 840, "bedroom/pir", 0),   # last movement 15..14 min ago
+                          (t - 10, "bedroom/pir", 1)])                                  # the press itself
+        self.assertAlmostEqual(habits.still_before(con, "bedroom/pir", t), 14.0)
+        self.assertEqual(habits.still_before(con, "living/pir", t), float(S.PREP_LOOK_MIN))
 
 
 if __name__ == "__main__":

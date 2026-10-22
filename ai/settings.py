@@ -51,14 +51,16 @@ SAVED_HORIZON_MIN = 60                   # saved Wh is estimated over the next h
 
 # ---- learned habits + trust ladder (docs/updates/2026-10-09_01_trust-ladder.md)
 HABIT_AHEAD_MIN = 30                     # "do you use it in the next half hour" (from the history, per 15-min slot)
-HABIT_ON_AT = 0.30                       # entering a dark room: the AI switches the light on if habit >= 0.30
-HABIT_ON_AT_REST = 0.50                  # ... but at times you usually rest / sleep there it must be clearly your
-                                         #     habit: leaving a reader in the dark costs one press, lighting a
-                                         #     sleeper can cost the whole night
+HABIT_ON_AT = 0.30                       # "you usually have it on now" (shown in the entry's label); entering a dark
+                                         # room switches the light on either way (Iyad's decision 2026-10-19), and
+                                         # the learned "getting ready" time switches it off once you lie still
 HABIT_OFF_AT = 0.50                      # light on while you rest: only if it is NOT clearly your habit now (<= 0.50);
                                          # 10 min without movement in a room where you usually rest is the main signal
 REST_AT = 0.80                           # "usually resting here now": the PIR was quiet in >= 80% of occupied slots
 STILL_OFF_MIN = 10                       # the PIR must also be quiet right now for 10 min (radar still sees you)
+RETRY_AFTER_MIN = 60                     # you switched it back on tonight (reading): one more try once 60 min have
+                                         #     passed since AND the PIR is quiet for STILL_OFF_MIN now — asleep. Not
+                                         #     60 min of unbroken stillness: a sleeper turns over every ~10 min
 ENTRY_WINDOW_S = 120                     # the AI decides about the light within 2 min of you walking in
 HABIT_MIN_DAYS = 7                       # a habit table needs at least a week of history
 TRUST_ASK, TRUST_NOTIFY, TRUST_SILENT = 0, 1, 2
@@ -69,6 +71,15 @@ NO_ANSWER_SNOOZE_MIN = 30                # an unanswered question is not asked a
 SELF_OFF_DAYS = 28                       # history counts as answers: in the last 4 weeks ...
 SELF_OFF_MIN_NIGHTS = 5                  # ... you switched the light off yourself after lying down on >= 5 nights
                                          #     -> it does it itself and tells you (level 1) without asking first
+HISTORY_BACK_NIGHTS = 3                  # after a "no" / undo the history stops counting, until you switched the light
+                                         #     off yourself on 3 later nights: then it does it itself again (level 1)
+PREP_MARGIN_MIN = 2                      # "getting ready" time (lying still -> you switch the light off yourself):
+PREP_LIMITS_MIN = (2, 20)                #     median of those nights + 2 min, kept within 2..20 min; it replaces
+                                         #     STILL_OFF_MIN once there are SELF_OFF_MIN_NIGHTS nights
+PREP_LOOK_MIN = 60                       # look back at most 1 h for the last movement before the press
+PREP_IGNORE_S = 30                       # the press itself (getting up to the switch) is not "lying still"
+NIGHT_RETURN_MIN = 15                    # back within 15 min to the room you usually sleep in now (bathroom at 3 am):
+                                         #     the light stays off; any other dark entry switches it on
 
 # ---- anomaly detection (INA226)
 ANOMALY_K = 4.0                          # median +/- 4 x MAD
