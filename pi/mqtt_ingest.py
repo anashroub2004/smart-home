@@ -36,6 +36,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
 
 import firebase_writer  # noqa: E402
+import house_words  # noqa: E402
 from firebase_writer import Writer, now_ms  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
@@ -90,11 +91,7 @@ class Ingest:
         return self.config["rooms"][self.dev_room[dev]]["devices"][dev]
 
     def label(self, dev):
-        """'Living room fan', 'Bedroom lights', 'Washer' — the same words the simulator uses."""
-        cfg, room = self.dev_cfg(dev), self.config["rooms"][self.dev_room[dev]]["name"]
-        if cfg.get("icon") in ("washer", "lock") or cfg["name"].lower().startswith(room.lower()):
-            return cfg["name"]
-        return f"{room} {cfg['name'] if cfg['name'].isupper() else cfg['name'].lower()}"
+        return house_words.label(self.config, dev)
 
     def node_config(self, node):
         """This node's part of /config (contract.md: home/<node>/config)."""

@@ -128,6 +128,7 @@ class FakeNode:
         self.apply_config(config, announce=False)
         self.sent = {}                      # topic -> (payload, ts) last published, for "on change + heartbeat"
         self.lock_open_until = 0
+        self.muted = False                  # "mute": still online and sending readings, but ignores every order
         self.client = None
 
     # ------------------------------------------------ config: which rooms / sensors / devices are mine
@@ -206,6 +207,8 @@ class FakeNode:
                 for dev in self.devices:
                     self.publish_state(dev)
             self.publish(f"home/{self.name}/config/ack", json.dumps({"version": self.version}), force=True)
+        elif self.muted:
+            say(self.name, "!!", msg.topic, "ignored (muted: the node hangs)")
         elif msg.topic == "home/door/open":
             self.open_lock(src=body.get("src") or "web")
         elif msg.topic.endswith("/set"):
@@ -375,6 +378,7 @@ HELP = """commands:
   exit                  exit button inside the door
   unplug <node>         power cut: the broker announces "offline" by itself (last will)
   plug <node>           power back: the node connects again
+  mute <node>           the node hangs: still online, but answers no order (unmute <node> to fix)
   quit"""
 
 
@@ -422,6 +426,10 @@ def console(nodes, world, config, stop):
                     n.door_event("keypad", bool(rest) and rest[0] == "ok")
                 else:
                     n.door_event("exit_button", True)
+            elif cmd in ("mute", "unmute") and rest and rest[0] in nodes:
+                nodes[rest[0]].muted = cmd == "mute"
+                print(f"{rest[0]} {'muted: orders are ignored' if cmd == 'mute' else 'answers orders again'}",
+                      flush=True)
             elif cmd == "unplug" and rest and rest[0] in nodes and nodes[rest[0]].client:
                 nodes[rest[0]].unplug()
                 print(f"{rest[0]} unplugged — the broker will say 'offline' within ~{int(KEEPALIVE_S * 1.5)} s",

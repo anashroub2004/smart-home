@@ -6,8 +6,26 @@
 | `rest_db.py` | عميل بسيط لـ Realtime Database عبر REST (مكتبة Python القياسية فقط) |
 | `sim_house.py` | محاكي البيت: يتصرف تماماً مثل الـ Pi حتى نبني الويب قبل وصول القطع |
 | `fake_nodes.py` | 3 عقد ESP32 وهمية على MQTT (`living`، `bedroom`، `door`) تتكلم رسائل `docs/contract.md` بالضبط. الغرف والحساسات والأجهزة من `/config`. تُستبدل بالعقد الحقيقية واحدة واحدة |
+| `mqtt_ingest.py` | **خدمة Pi** (1b): MQTT ← SQLite (للـ AI) + `/home_state` + `/nodes` + `/events` (زر الجدار، عقدة offline)، ويرسل لكل عقدة جزأها من `/config` |
+| `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
+| `house_words.py` | كلمات History المشتركة بين الخدمات ("Living room fan"، "On · Medium") |
 
-## العقد الوهمية (المرحلة 1)
+## المرحلة 1: العقد الوهمية + خدمات الـ Pi على الحاسوب
+
+```bash
+# نافذة 1: Firebase المحلي
+firebase emulators:start --only auth,database
+# نافذة 2: العقد الوهمية (help: press، move، finger، unplug، mute ...)
+python pi/fake_nodes.py
+# نافذة 3: الأذن — تملأ /config وحساب owner في Firebase فارغ
+python pi/mqtt_ingest.py
+# نافذة 4: اليد
+python pi/commands.py
+# نافذة 5: التطبيق ← http://localhost:3000  (owner@home.test / password123)
+cd web; npm run dev
+```
+
+## العقد الوهمية وحدها
 
 يحتاج Mosquitto (على Windows: `winget install --id EclipseFoundation.Mosquitto --source winget`، يعمل كخدمة تلقائياً) و`pip install "paho-mqtt>=2.0,<3"`.
 
