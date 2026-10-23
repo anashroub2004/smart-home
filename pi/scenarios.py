@@ -53,18 +53,27 @@ class ScenarioRunner:
     def ai(self):
         return self.h.ai
 
+    def rooms_in_order(self):
+        """Rooms by their "order" in /config. Firebase returns keys alphabetically (bathroom, bedroom, ...) while
+        docs/seed.json lists the living room first: without this the twin and the real services would test
+        different devices."""
+        rooms = self.h.config["rooms"]
+        return sorted(rooms, key=lambda r: (rooms[r].get("order", 99), r))
+
     def pick(self, kind):
-        """First AI device of this kind in a room with a radar (from the config)."""
+        """First AI device of this kind in a room with a radar (from the config, in room order)."""
         if not self.ai:
             return None
-        for dev, spec in self.ai.specs.items():
+        order = {r: i for i, r in enumerate(self.rooms_in_order())}
+        for spec in sorted(self.ai.specs.values(), key=lambda s: (order.get(s.room, 99), s.id)):
             if spec.kind == kind and any(k.endswith("/mmwave") for k in spec.presence_keys):
                 return spec
         return None
 
     def other_room(self, rid):
-        for r, rc in self.h.config["rooms"].items():
-            if r != rid and not rc.get("hidden") and "occ" in (rc.get("sensors") or []):
+        rooms = self.h.config["rooms"]
+        for r in self.rooms_in_order():
+            if r != rid and not rooms[r].get("hidden") and "occ" in (rooms[r].get("sensors") or []):
                 return r
         return OUT
 
@@ -221,7 +230,9 @@ class ScenarioRunner:
     def setup_trust_ladder(self, c):
         from ai import trust
         spec = None
-        for dev, sp in self.ai.specs.items():           # a light in a room with radar + PIR where you usually sleep
+        order = {r: i for i, r in enumerate(self.rooms_in_order())}
+        for sp in sorted(self.ai.specs.values(), key=lambda s: (order.get(s.room, 99), s.id)):
+            dev = sp.id                                 # a light in a room with radar + PIR (room order, like the twin)
             keys = sp.presence_keys
             if sp.kind == "light" and any(k.endswith("/mmwave") for k in keys) and any(k.endswith("/pir") for k in keys) \
                     and self.ai.bundles.get(dev):
