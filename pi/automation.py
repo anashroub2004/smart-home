@@ -95,11 +95,13 @@ class SafeSink:
 
 
 class Automation(house_state.Listener):
-    def __init__(self, writer, config, args):
+    def __init__(self, writer, config, args, clock=None):
         self.w, self.args = writer, args
         self.lock = threading.Lock()
         self.client = self.ex = None
-        self.house = house_state.HouseState(config, self)
+        self.sim = clock                                        # hub_clock.SharedClock with --sim-clock
+        self.clock = clock.now if clock else time.time          # the house's time (rules, AI, entry windows)
+        self.house = house_state.HouseState(config, self, self.clock)
         self.entered = {}           # room -> True until the rules have looked at this entry once
         self.manual_at = {}         # device -> ts of the last manual control (button / app)
         self.override_until = {}    # device -> hands off until (manual control)
@@ -107,10 +109,10 @@ class Automation(house_state.Listener):
         self.ai_pause = {}          # device -> ms (the app's pause switch)
         self.scene = None
         self.door_entry_at = self.door_exit_at = None
-        start = time.time()         # room -> ts it became empty; nobody seen yet = empty from now on
+        start = self.clock()        # room -> ts it became empty; nobody seen yet = empty from now on
         self.empty_since = {rid: start for rid in self.house.rooms}
         self.ai, self.ai_errors, self.ai_ready = None, 0, False
-        self.next_train = next_3am()
+        self.next_train = next_3am(self.clock())
 
     @property
     def config(self):
@@ -143,18 +145,27 @@ class Automation(house_state.Listener):
         con = store.connect(self.args.db)
         sink = SafeSink(FirebaseSink(self.w, room_of=lambda d: self.house.dev_room.get(d),
                                      room_name=lambda r: self.config["rooms"].get(r, {}).get("name", r)))
-        self.ai = AIRuntime(self.config, con, sink, model_dir=MODELS, speed=1, record=False,
-                            clock=time.time, persona=Persona.load(None))
+        models = MODELS.with_name("home_sim") if self.sim else MODELS   # fast-clock tests keep their own notebook
+        self.ai = AIRuntime(self.config, con, sink, model_dir=models, speed=1, record=False,
+                            clock=self.clock, persona=Persona.load(None))
         self.clean_suggestions()
 
         def boot():
             t0 = time.time()
-            self.ai_safe(self.ai.bootstrap_if_needed)
-            if self.args.train_now:
-                self.ai_safe(self.ai.retrain)
+            if self.sim:
+                self.sim.wait_ready()
+                self.sim.hold("automation")                     # the world's day waits while the AI gets ready
+            try:
+                self.ai_safe(self.ai.bootstrap_if_needed)
+                if self.args.train_now:
+                    self.ai_safe(self.ai.retrain)
+            finally:
+                if self.sim:
+                    self.sim.hold("automation", False)
             if self.ai:
+                self.next_train = next_3am(self.clock())
                 self.ai_ready = True
-                say(f"AI ready in {time.time() - t0:.0f} s · models in ai/models/home · "
+                say(f"AI ready in {time.time() - t0:.0f} s · models in ai/models/{models.name} · "
                     f"{self.ai.report.get('data_source', '?')} data · next training {datetime.fromtimestamp(self.next_train):%a %H:%M}")
         threading.Thread(target=boot, daemon=True).start()
         say("AI starting (simulated history + training if needed) — the rules decide meanwhile")
@@ -221,18 +232,27 @@ class Automation(house_state.Listener):
         if not (self.ai and self.ai_ready):
             return
         if self.ai_safe(self.ai.training):
+            done = False
             try:
                 if self.ai.finish_retrain() is not None:
+                    done = True
                     say("AI retrained · " + str(self.ai.report.get("data_source", "?")) + " data")
                     self.clean_suggestions()
                     self.ai_plan()
             except Exception as e:  # noqa: BLE001 — keep the previous models
+                done = True
                 say(f"! AI retraining failed ({type(e).__name__}: {e}) — keeping the previous models")
+            if done and self.sim:
+                self.sim.hold("automation", False)
             return
-        if time.time() >= self.next_train:
-            self.next_train = next_3am()
+        if self.clock() >= self.next_train:
+            self.next_train = next_3am(self.clock())
+            if self.sim:
+                self.sim.hold("automation")                     # the world's night waits for the new models
             if not self.ai_safe(self.ai.start_retrain):
                 self.ai_safe(self.ai.retrain, quiet=True)
+                if self.sim:
+                    self.sim.hold("automation", False)
             say("AI nightly retraining started")
 
     def handle_answers(self):
@@ -282,8 +302,15 @@ class Automation(house_state.Listener):
         if reason_code.is_failure:
             say("!! MQTT connect failed:", reason_code)
             return
+        if self.sim:                                            # the time first: the rules and the AI need it
+            self.sim.attach(client, then=lambda: self.listen(client))
+        else:
+            self.listen(client)
+
+    def listen(self, client):
         client.subscribe("home/#", qos=1)
-        say("listening to home/# on", f"{self.args.host}:{self.args.port}")
+        say("listening to home/# on", f"{self.args.host}:{self.args.port}"
+            + (f" · shared clock x{self.sim.speed:g}" if self.sim else ""))
 
     def on_message(self, client, userdata, msg):
         topic, payload = msg.topic, msg.payload.decode("utf-8", "replace")
@@ -295,7 +322,7 @@ class Automation(house_state.Listener):
 
     # ------------------------------------------------------------------ what changed (house_state.Listener)
     def occ_changed(self, rid, occ):
-        now = time.time()
+        now = self.clock()
         if occ:
             self.empty_since.pop(rid, None)
             self.entered[rid] = True
@@ -309,7 +336,7 @@ class Automation(house_state.Listener):
     def device_changed(self, dev, before, src, changed):
         st = self.house.devices[dev]
         if changed and src in ("button", "web"):
-            now = time.time()
+            now = self.clock()
             self.manual_at[dev] = now
             self.override_until[dev] = now + float(self.th.get("override_pause_min", 120)) * 60
             self.manual_q.append((dev, st.get("v")))
@@ -319,17 +346,17 @@ class Automation(house_state.Listener):
     def door_event(self, ev):
         """For the AI's "someone is home": a door entry counts until someone goes out through the door."""
         if ev.get("ok") and ev.get("type") in ("fingerprint", "keypad"):
-            self.door_entry_at = time.time()
+            self.door_entry_at = self.clock()
         elif ev.get("type") == "exit_button":
-            self.door_exit_at = time.time()
+            self.door_exit_at = self.clock()
 
     # ------------------------------------------------------------------ pauses, scene
     def user_paused(self, dev):
         """The app's pause switch in the device sheet (/ai_pause/{device} = until ms)."""
-        return now_ms() < int(self.ai_pause.get(dev) or 0)
+        return time.time() * 1000 < int(self.ai_pause.get(dev) or 0)       # the app writes real time
 
     def paused(self, dev):
-        return time.time() < self.override_until.get(dev, 0) or self.user_paused(dev)
+        return self.clock() < self.override_until.get(dev, 0) or self.user_paused(dev)
 
     def sync_slow(self):
         """/ai_pause and the scene (Away = nobody home) from Firebase. Without the internet: the last known."""
@@ -342,7 +369,7 @@ class Automation(house_state.Listener):
         for dev in set(new) | set(self.ai_pause):
             if dev not in self.house.dev_room or new.get(dev) == self.ai_pause.get(dev):
                 continue
-            paused_now = bool(new.get(dev)) and int(new[dev]) > now_ms()
+            paused_now = bool(new.get(dev)) and int(new[dev]) > time.time() * 1000
             until = time.strftime("%H:%M", time.localtime(int(new[dev]) / 1000)) if paused_now else None
             self.safe(self.w.log_event, "config", "manual",
                       f"AI {'paused' if paused_now else 'resumed'} for {house_words.label(self.config, dev).lower()}",
@@ -355,7 +382,7 @@ class Automation(house_state.Listener):
     # ------------------------------------------------------------------ the rules
     def apply_rules(self):
         """Per-device rules from /config (device.rules), only for devices with control.rules = true."""
-        t, th, h = time.time(), self.th, self.house
+        t, th, h = self.clock(), self.th, self.house
         ai = self.ai if self.ai_on() else None
         todo = []
         with self.lock:
@@ -412,7 +439,7 @@ class Automation(house_state.Listener):
         """The AI decides about a light within ENTRY_WINDOW of an entry (its own window): keep the entry
         open for the rule until then, in case the AI is not ready for this light after all."""
         occ_since = (self.house.rooms.get(rid) or {}).get("occ_since") or 0
-        return time.time() - occ_since / 1000 >= ENTRY_WINDOW_S
+        return self.clock() - occ_since / 1000 >= ENTRY_WINDOW_S
 
     @staticmethod
     def mid_level(cfg):
@@ -485,8 +512,16 @@ def main():
     ap.add_argument("--no-ai", action="store_true", help="the rules only")
     ap.add_argument("--train-now", action="store_true", help="retrain the AI at start (else every night at 03:00)")
     ap.add_argument("--ask", metavar="DEVICE", help="test: once the AI is ready it asks about this device")
+    ap.add_argument("--sim-clock", action="store_true",
+                    help="test only: use the world's fast clock (fake_nodes.py --world --speed N, hub/clock)")
     args = ap.parse_args()
 
+    sim = None
+    if args.sim_clock:
+        import firebase_writer
+        from hub_clock import SharedClock
+        sim = SharedClock()
+        firebase_writer.set_clock(sim.now)                     # History timestamps follow the world's time
     w, where = open_firebase(args)
     try:
         config = w.get_config()
@@ -494,7 +529,7 @@ def main():
         sys.exit(f"Cannot reach Firebase ({where}): {e}\nStart the emulators first:  firebase emulators:start")
     if not config:
         sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
-    auto = Automation(w, config, args)
+    auto = Automation(w, config, args, clock=sim)
     try:
         auto.connect()
     except OSError as e:
@@ -506,11 +541,12 @@ def main():
     if not args.no_ai:
         auto.start_ai()
 
-    last = {"slow": 0.0, "config": time.time(), "tick": time.time(), "plan": 0.0}
+    # real seconds for Firebase / MQTT chores, the house's time (auto.clock) for the rules and the AI
+    last = {"slow": 0.0, "config": time.time(), "tick": auto.clock(), "plan": 0.0}
     asked, started = False, time.time()
     try:
         while True:
-            now = time.time()
+            now, house_now = time.time(), auto.clock()
             auto.ex.check_timeouts()
             auto.check_holds()
             if now - last["slow"] >= SLOW_S:
@@ -518,20 +554,20 @@ def main():
                 auto.handle_answers()
                 auto.ai_night()
                 last["slow"] = now
-            if now - last["tick"] >= TICK_S:
-                auto.ai_tick(now - last["tick"])
+            if house_now - last["tick"] >= TICK_S or (sim and house_now > last["tick"]):
+                auto.ai_tick(house_now - last["tick"])         # a fast clock: every loop (like the twin's tick)
                 auto.apply_rules()
-                last["tick"] = now
-            if auto.ai_on() and now - last["plan"] >= PLAN_S:
+                last["tick"] = house_now
+            if auto.ai_on() and house_now - last["plan"] >= PLAN_S:
                 auto.ai_plan()
-                last["plan"] = now
+                last["plan"] = house_now
             if args.ask and not asked and auto.ai_on() and now - started > 75:   # after the first heartbeats
                 asked = True
                 say(f"test question about {args.ask}:", auto.ask_now(args.ask) or "the AI did not ask (sensors)")
             if now - last["config"] >= CONFIG_EVERY_S:
                 auto.check_config()
                 last["config"] = now
-            time.sleep(0.5)
+            time.sleep(0.25 if sim else 0.5)
     except KeyboardInterrupt:
         pass
     auto.client.loop_stop()

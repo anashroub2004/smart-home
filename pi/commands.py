@@ -41,7 +41,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
 
 import house_words  # noqa: E402
-from firebase_writer import Writer, now_ms  # noqa: E402
+from firebase_writer import Writer  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
@@ -59,8 +59,10 @@ def say(*parts):
 
 
 class Commands:
-    def __init__(self, writer, con, config, args):
+    def __init__(self, writer, con, config, args, clock=None):
         self.w, self.con, self.args = writer, con, args
+        self.sim = clock                                        # hub_clock.SharedClock with --sim-clock
+        self.clock = clock.now if clock else time.time
         self.lock = threading.Lock()
         self.client = None
         self.online = {}        # node -> True / False (from home/<node>/status, retained)
@@ -91,6 +93,8 @@ class Commands:
         if reason_code.is_failure:
             say("!! MQTT connect failed:", reason_code)
             return
+        if self.sim:
+            self.sim.attach(client)                           # SQLite / History timestamps follow the world
         client.subscribe("home/+/status", qos=1)          # which nodes are alive (retained + last will)
         client.subscribe("home/+/+/state", qos=1)         # the nodes' answers
         say("connected to MQTT", f"{self.args.host}:{self.args.port}")
@@ -170,12 +174,13 @@ class Commands:
             return
         self.scene = scene
         self.w.patch_home_state({"scene": scene})
-        store.write(self.con, [(int(time.time()), "mode/away", 1.0 if scene == "away" else 0.0)])
+        store.write(self.con, [(int(self.clock()), "mode/away", 1.0 if scene == "away" else 0.0)])
 
     # ------------------------------------------------------------------ the end of a command
     def finish(self, dev, job, state):
         cmd, meta = job["cmd"], job["meta"]
-        latency = max(0, now_ms() - int(cmd.get("at") or now_ms()))
+        real_ms = int(time.time() * 1000)                       # the app stamps "at" with the real time
+        latency = max(0, real_ms - int(cmd.get("at") or real_ms))
         self.w.ack_command(dev, True)
         rid, cfg = self.index[dev]
         if job["lock"]:
@@ -184,7 +189,7 @@ class Commands:
                              device=dev, room=rid, node=job["node"], by=cmd.get("by"), by_label=meta["by_label"],
                              why="Remote unlock, confirmed in the app", short=meta["short"],
                              change="Locked → Unlocked → Locked", latency_ms=latency, tags=["door", "manual"])
-            store.write(self.con, [(int(time.time()), "door/entry", 1.0)])     # someone was let in
+            store.write(self.con, [(int(self.clock()), "door/entry", 1.0)])     # someone was let in
         else:
             before = job["before"]
             what = "turned on" if state.get("v") else "turned off"
@@ -200,7 +205,7 @@ class Commands:
                              to={k: state[k] for k in ("v", "level", "mode") if state.get(k) is not None},
                              latency_ms=latency, tags=meta["tags"])
             # manual control (app, scene, an approved suggestion): the AI keeps its hands off this device
-            store.write(self.con, [(int(time.time()), f"override/{dev}", 1.0)])
+            store.write(self.con, [(int(self.clock()), f"override/{dev}", 1.0)])
         say(f"{dev}: done in {latency} ms")
 
     def fail(self, dev, job, why):
@@ -241,8 +246,16 @@ def main():
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--db", default=str(AIS.DB_PATH), help="SQLite file the AI reads (default ai/data/home.db)")
     ap.add_argument("--cloud", metavar="KEY_JSON", help="the REAL Firebase project with this service-account key")
+    ap.add_argument("--sim-clock", action="store_true",
+                    help="test only: use the world's fast clock (fake_nodes.py --world --speed N, hub/clock)")
     args = ap.parse_args()
 
+    sim = None
+    if args.sim_clock:
+        import firebase_writer
+        from hub_clock import SharedClock
+        sim = SharedClock()
+        firebase_writer.set_clock(sim.now)                     # History timestamps follow the world's time
     w, where = open_firebase(args)
     try:
         config = w.get_config()
@@ -251,7 +264,7 @@ def main():
     if not config:
         sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
-    cmds = Commands(w, store.connect(args.db), config, args)
+    cmds = Commands(w, store.connect(args.db), config, args, clock=sim)
     try:
         cmds.connect()
     except OSError as e:
@@ -261,7 +274,7 @@ def main():
     for dev, cmd in (w.get_commands() or {}).items():
         if isinstance(cmd, dict):
             cmds.seen[dev] = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
-            if cmd.get("status") == "pending" and now_ms() - int(cmd.get("at") or 0) > 10_000:
+            if cmd.get("status") == "pending" and time.time() * 1000 - int(cmd.get("at") or 0) > 10_000:
                 w.ack_command(dev, False, "Expired: the hub was not running")
     say(f"Firebase: {where} · node timeout {NODE_TIMEOUT_S:.0f} s · /commands every {POLL_S:.0f} s")
 

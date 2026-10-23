@@ -58,13 +58,15 @@ def say(*parts):
 class Ingest(house_state.Listener):
     """Builds the picture of the house (house_state.HouseState) and records / shows what changes."""
 
-    def __init__(self, writer, con, config, args):
+    def __init__(self, writer, con, config, args, clock=None):
         self.w, self.args = writer, args
         self.recorder = store.Recorder(con)
         self.lock = threading.Lock()
         self.client = None
         self.dirty = set()                                      # Firebase paths to write at the next flush
-        self.house = house_state.HouseState(config, self)
+        self.sim = clock                                        # hub_clock.SharedClock with --sim-clock
+        self.clock = clock.now if clock else time.time
+        self.house = house_state.HouseState(config, self, self.clock)
 
     @property
     def config(self):
@@ -105,8 +107,15 @@ class Ingest(house_state.Listener):
         if reason_code.is_failure:
             say("!! MQTT connect failed:", reason_code)
             return
+        if self.sim:                                            # the time first: readings are stamped with it
+            self.sim.attach(client, then=lambda: self.listen(client))
+        else:
+            self.listen(client)
+
+    def listen(self, client):
         client.subscribe("home/#", qos=1)
-        say("listening to home/# on", f"{self.args.host}:{self.args.port}")
+        say("listening to home/# on", f"{self.args.host}:{self.args.port}"
+            + (f" · shared clock x{self.sim.speed:g}" if self.sim else ""))
         self.send_configs()
 
     def on_message(self, client, userdata, msg):
@@ -121,7 +130,7 @@ class Ingest(house_state.Listener):
 
     # ------------------------------------------------------------------ what changed (house_state.Listener)
     def reading(self, key, value):
-        self.recorder.observe({key: value})
+        self.recorder.observe({key: value}, ts=self.clock())
 
     def room_changed(self, rid):
         self.dirty.add(f"rooms/{rid}")
@@ -145,7 +154,7 @@ class Ingest(house_state.Listener):
     def door_event(self, ev):
         """A person came in (fingerprint / PIN): the AI's door/entry. Access log + alerts are security.py."""
         if ev.get("ok") and ev.get("type") in ("fingerprint", "keypad"):
-            self.recorder.event("door/entry")
+            self.recorder.event("door/entry", ts=self.clock())
             say("door", f"entry ({ev.get('type')})")
 
     def device_changed(self, dev, before, src, changed):
@@ -155,7 +164,7 @@ class Ingest(house_state.Listener):
             # and the History must show it. Changes from the app / AI / rules are logged by the service
             # that asked for them (commands.py, automation.py) — not twice.
             st = self.house.devices[dev]
-            self.recorder.event(f"override/{dev}")
+            self.recorder.event(f"override/{dev}", ts=self.clock())
             rid = self.house.dev_room[dev]
             room = self.config["rooms"][rid]
             what = "turned on" if st["v"] else "turned off"
@@ -174,7 +183,7 @@ class Ingest(house_state.Listener):
     def snapshot(self):
         """All current values once a minute: the Recorder decides what is new (its 15-min heartbeat)."""
         with self.lock:
-            self.recorder.observe(self.house.values())
+            self.recorder.observe(self.house.values(), ts=self.clock())
 
     def flush(self):
         """Send what changed to Firebase in one patch (rooms + devices + total power + nodes)."""
@@ -229,8 +238,9 @@ def first_config(w, args):
     cfg = w.get_config()
     if cfg or args.cloud:
         return cfg
+    keep = firebase_writer._clock
     import sim_house                                  # setup helpers only (it also swaps in a virtual clock)
-    firebase_writer.set_clock(time.time)
+    firebase_writer.set_clock(keep)
     cfg = sim_house.seed(w, False)
     if not args.memory:
         sim_house.ensure_owner(w)
@@ -245,8 +255,15 @@ def main():
     ap.add_argument("--memory", action="store_true", help="no Firebase: keep everything in memory")
     ap.add_argument("--cloud", metavar="KEY_JSON", help="the REAL Firebase project with this service-account key")
     ap.add_argument("--verbose", action="store_true", help="print every message and every Firebase write")
+    ap.add_argument("--sim-clock", action="store_true",
+                    help="test only: use the world's fast clock (fake_nodes.py --world --speed N, hub/clock)")
     args = ap.parse_args()
 
+    sim = None
+    if args.sim_clock:
+        from hub_clock import SharedClock
+        sim = SharedClock()
+        firebase_writer.set_clock(sim.now)                     # Firebase timestamps follow the world's time too
     w, where = open_firebase(args)
     try:
         config = first_config(w, args)
@@ -256,7 +273,7 @@ def main():
         sys.exit("/config is empty in the real database: set it up first (see docs/DEPLOY.md)")
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     con = store.connect(args.db)
-    ing = Ingest(w, con, config, args)
+    ing = Ingest(w, con, config, args, clock=sim)
     say(f"Firebase: {where} · SQLite: {args.db} · config v{config.get('version')} · "
         f"PIR hold {ing.th.get('pir_hold_s', house_state.PIR_HOLD_S)} s")
     try:
@@ -268,7 +285,7 @@ def main():
     try:
         while True:
             now = time.time()
-            if now - last["hold"] >= HOLD_CHECK_S:
+            if now - last["hold"] >= (0.25 if sim else HOLD_CHECK_S):     # a fast clock: PIR holds end in time
                 ing.check_holds()
                 last["hold"] = now
             if now - last["flush"] >= FLUSH_S:

@@ -19,8 +19,8 @@ PRESENCE = ("mmwave", "pir")
 PIR_HOLD_S = 300          # default for thresholds.pir_hold_s
 
 
-def now_ms():
-    return int(time.time() * 1000)
+def now_ms(clock=time.time):
+    return int(clock() * 1000)
 
 
 def number(payload):
@@ -59,8 +59,9 @@ class Listener:
 
 
 class HouseState:
-    def __init__(self, config, listener=None):
+    def __init__(self, config, listener=None, clock=time.time):
         self.l = listener or Listener()
+        self.clock = clock          # time.time, or the shared test clock (pi/hub_clock.py, --sim-clock)
         self.rooms, self.devices, self.nodes = {}, {}, {}
         self.load_config(config)
 
@@ -140,7 +141,7 @@ class HouseState:
             return
         room, v = self.rooms[rid], int(value >= 0.5)
         if kind == "pir" and v:
-            room["_motion"] = time.time()
+            room["_motion"] = self.clock()
         if room.get(kind) != v:
             room[kind] = v
             self.l.room_changed(rid)
@@ -157,9 +158,9 @@ class HouseState:
             occ, by = int(bool(room.get("mmwave") or room.get("pir"))), "mmwave" if room.get("mmwave") else "pir"
         else:
             hold = float(self.th.get("pir_hold_s", PIR_HOLD_S))
-            occ, by = int(time.time() - room.get("_motion", 0) < hold), "pir"
+            occ, by = int(self.clock() - room.get("_motion", 0) < hold), "pir"
         if occ != room.get("occ"):
-            room["occ"], room["occ_since"] = occ, now_ms()
+            room["occ"], room["occ_since"] = occ, now_ms(self.clock)
             if occ:
                 room["occ_by"] = by
             self.l.room_changed(rid)
@@ -183,7 +184,7 @@ class HouseState:
             st["src"] = src
         changed = before != {k: st.get(k) for k in ("v", "level", "mode")}
         if changed:
-            st["at"] = now_ms()
+            st["at"] = now_ms(self.clock)
         self.l.reading(f"device/{dev}", st["v"])
         if st.get("level") is not None:
             self.l.reading(f"level/{dev}", st["level"])
@@ -202,7 +203,7 @@ class HouseState:
             # monitor-only device (fridge, kettle): on/off comes from the current it draws
             on = int(st["watts"] > float((cfg.get("hw") or {}).get("on_above_w", 0.5)))
             if on != st.get("v"):
-                st.update(v=on, src="system", at=now_ms())
+                st.update(v=on, src="system", at=now_ms(self.clock))
                 self.l.reading(f"device/{dev}", on)
         self.l.power_changed(dev)
 

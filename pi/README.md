@@ -10,6 +10,7 @@
 | `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
 | `automation.py` | **خدمة Pi** (1d): العقل. القواعد (1d-1) + الـ AI الحقيقي (1d-2: plan كل 15 د، tick كل 5 ث، الأسئلة، التدريب 03:00، نماذج `ai/models/home`). يرى البيت بنفسه عبر MQTT، وينفّذ بـ `src: rule` / `ai`، ويحترم التحكم اليدوي و`/ai_pause`. خيارات: `--no-ai`، `--train-now`، `--ask DEVICE` |
 | `world.py` | **العالم**: أحمد (روتين `ai/personas`)، وما تراه الحساسات (حضور، حرارة ورطوبة بقصور الغرفة، ضوء النهار)، وما يفعله بيده (أزرار، أجهزة من خطة يومه). مصدر واحد لـ `sim_house.py` و`fake_nodes.py --world` |
+| `hub_clock.py` | **للاختبار فقط:** الساعة المسرّعة المشتركة (`hub/clock`) — العالم ينشرها، والخدمات بـ `--sim-clock` تقرؤها، والـ AI يوقفها أثناء التدريب |
 | `house_state.py` | "صورة البيت" من رسائل العقد (من في الغرفة، حرارة، أجهزة) — نفس الكود لـ `mqtt_ingest` و`automation` |
 | `mqtt_exec.py` | `MqttExecutor`: "أرسل `set` وانتظر رد العقدة 5 ثوانٍ" — لـ `commands` و`automation` |
 | `house_words.py` | كلمات History المشتركة بين الخدمات ("Living room fan"، "On · Medium") |
@@ -31,6 +32,18 @@ python pi/automation.py
 # نافذة 6: التطبيق ← http://localhost:3000  (owner@home.test / password123)
 cd web; npm run dev
 ```
+
+### يوم كامل في 24 دقيقة (ساعة مشتركة ×60، للاختبار فقط)
+
+العالم يملك الساعة وينشرها على `hub/clock`، والخدمات تقرؤها بـ `--sim-clock` (`pi/hub_clock.py`). ابدأ العالم **أولاً**، واستعمل قاعدة بيانات منفصلة لأن الوقت المسرّع يسبق الحقيقي:
+
+```bash
+python pi/fake_nodes.py --world --speed 60          # أوامر: time، jump 21:00، speed 120، pause، resume
+python pi/mqtt_ingest.py --sim-clock --db ai/data/home_sim.db
+python pi/commands.py --sim-clock --db ai/data/home_sim.db
+python pi/automation.py --sim-clock --db ai/data/home_sim.db     # نماذج ai/models/home_sim
+```
+أثناء تدريب الـ AI (أول تشغيل، و03:00 كل ليلة) يطلب `automation` إيقاف الساعة، فيتوقف يوم أحمد كما في التوأم.
 
 ## العقد الوهمية وحدها
 

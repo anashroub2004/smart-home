@@ -141,15 +141,18 @@ class World:
 
 class AhmedWorld:
     """--world: the simulated person of the digital twin lives here (pi/world.py, the routine file), and the
-    fake nodes publish what his world shows. Real time (stage 1e-1); a shared fast clock comes in 1e-2.
+    fake nodes publish what his world shows. Real time, or with --speed N a fast clock the world owns and
+    publishes on hub/clock (pi/hub_clock.py) for the services started with --sim-clock (stage 1e-2).
     This object is the `h` that pi/world.py works on."""
 
-    def __init__(self, config, nodes):
+    def __init__(self, config, nodes, speed=None):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         global world, OUT
         import house_words
+        import hub_clock
         import world
+        self.clock = hub_clock.ClockPublisher(speed) if speed else None
         from ai.persona import Persona
         from person import OUT, Person
         self.words, self.nodes = house_words, nodes
@@ -168,7 +171,7 @@ class AhmedWorld:
 
     # ---- what pi/world.py reads
     def now(self):
-        return time.time()
+        return self.clock.now() if self.clock else time.time()
 
     def vnow(self):
         from datetime import datetime
@@ -360,6 +363,7 @@ class FakeNode:
         if not force and last and last[0] == payload and now - last[1] < HEARTBEAT_S:
             return
         quiet = not force and last and last[0] == payload        # heartbeat: same value again
+        quiet = quiet or (self.args.speed and retain)            # fast clock: readings fly by, don't print them
         self.sent[topic] = (payload, now)
         self.client.publish(topic, payload, qos=1, retain=retain)
         if not quiet or self.args.verbose:
@@ -464,15 +468,16 @@ class FakeNode:
             sensors = rc.get("sensors") or []
             fmt = {"temp": lambda v: f"{v:.1f}", "hum": lambda v: f"{v:.0f}",
                    "lux": lambda v: f"{round(v / 10) * 10:.0f}"}                    # BH1750, 10 lx steps
+            # retained: a service that starts later knows every reading at once (no minute of "getting to know")
             for kind in ("temp", "hum", "lux"):
                 if kind in sensors:
                     v = w.reading(self, rid, kind)
                     if v is not None:
-                        self.publish(f"home/{rid}/{kind}", fmt[kind](v))
+                        self.publish(f"home/{rid}/{kind}", fmt[kind](v), retain=True)
             for s in presence_sensors(rc):
                 v = w.reading(self, rid, s)
                 if v is not None:
-                    self.publish(f"home/{rid}/{s}", str(int(v)))
+                    self.publish(f"home/{rid}/{s}", str(int(v)), retain=True)
         for dev in self.devices:
             if self.is_lock(dev) and self.devices[dev]["v"] and time.time() >= self.lock_open_until:
                 self.devices[dev]["v"] = 0                                  # the door locks itself again
@@ -509,6 +514,7 @@ HELP = """commands:
   plug <node>           power back: the node connects again
   mute <node>           the node hangs: still online, but answers no order (unmute <node> to fix)
   with --world:  move <room|out> takes Ahmed out of his routine, routine gives it back, hotter <°C> warms every room
+  with --speed:  time, jump <HH:MM>, speed <N>, pause, resume (the shared clock on hub/clock)
   quit"""
 
 
@@ -550,6 +556,17 @@ def console(nodes, world, config, stop):
             elif cmd == "routine" and isinstance(world, AhmedWorld):
                 world.person.give_back()
                 print("Ahmed follows his routine again", flush=True)
+            elif cmd in ("jump", "speed", "pause", "resume", "time") and getattr(world, "clock", None):
+                c = world.clock
+                if cmd == "jump" and rest:
+                    c.jump_to(rest[0])
+                elif cmd == "speed" and rest:
+                    c.set_speed(float(rest[0]))
+                elif cmd in ("pause", "resume"):
+                    c.pause(cmd == "pause")
+                print(f"world time {world.vnow():%a %H:%M:%S} · x{c.clock.speed:g}"
+                      + (" · paused" if c.clock.paused else "")
+                      + (f" · held by {', '.join(sorted(c.holders))}" if c.holders else ""), flush=True)
             elif cmd in ("finger", "pin", "exit"):
                 n = door()
                 if not n:
@@ -590,15 +607,25 @@ def main():
     ap.add_argument("--verbose", action="store_true", help="also print heartbeats (unchanged values)")
     ap.add_argument("--world", action="store_true",
                     help="Ahmed (the digital twin's person, his routine file) lives in the house: pi/world.py")
+    ap.add_argument("--speed", type=float, default=0,
+                    help="with --world: a fast clock (e.g. 60) published on hub/clock for services run with --sim-clock")
     args = ap.parse_args()
+    if args.speed and not args.world:
+        sys.exit("--speed needs --world (the world owns the clock)")
 
     config = load_config(args.config)
     names = [n for n in (config.get("nodes") or {}) if (not args.only or n in args.only) and n not in args.offline]
     if not names:
         sys.exit("no node to run (check --only / --offline)")
     nodes = {}
-    world = AhmedWorld(config, nodes) if args.world else World(config)
+    world = AhmedWorld(config, nodes, speed=args.speed or None) if args.world else World(config)
     nodes.update({n: FakeNode(n, config, world, args) for n in names})
+    if args.speed:
+        clock_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fake-world-clock")
+        clock_client.on_connect = lambda c, *a: world.clock.attach(c)
+        clock_client.connect(args.host, args.port, keepalive=30)
+        clock_client.loop_start()
+        say("world", "**", f"clock x{args.speed:g} on hub/clock", "(services: --sim-clock)")
     for n in nodes.values():
         rooms = ", ".join(f"{r} ({', '.join(rc.get('sensors') or []) or 'no sensors'})" for r, rc in n.rooms.items())
         with PRINT_LOCK:
@@ -616,7 +643,8 @@ def main():
             for n in nodes.values():
                 if n.client:
                     n.tick()
-            stop.wait(SENSOR_EVERY_S)
+            # a fast clock moves the world every quarter second (15 virtual s at x60, like the twin's tick)
+            stop.wait(0.25 if args.speed else SENSOR_EVERY_S)
     except KeyboardInterrupt:
         pass
     for n in nodes.values():
