@@ -46,6 +46,8 @@ from ai import settings as AIS  # noqa: E402
 FLUSH_S = 2.0             # Firebase gets the changes at most every 2 s (20 MQTT messages/s would waste quota)
 HOLD_CHECK_S = 5.0        # how often PIR-only rooms are checked for "no motion for pir_hold_s"
 SNAPSHOT_S = 60.0         # every minute all values go to the Recorder too (it writes its 15-min heartbeat)
+ENERGY_S = 2.0            # the energy counter adds watts x time this often (real seconds)
+BASE_W = 6.8              # the Pi + the 3 nodes + their sensors (no INA226 on them; the simulator's figure)
 
 PRINT_LOCK = threading.Lock()
 
@@ -67,6 +69,10 @@ class Ingest(house_state.Listener):
         self.sim = clock                                        # hub_clock.SharedClock with --sim-clock
         self.clock = clock.now if clock else time.time
         self.house = house_state.HouseState(config, self, self.clock)
+        # energy today, Wh per device + "_base": continues after a restart (read back from /energy_daily on the
+        # first count — with --sim-clock the world's time is only known once hub/clock has arrived)
+        self.energy_day, self.energy, self.energy_t = None, {}, None
+        self.minute = None                                      # the house minute last summarised
 
     @property
     def config(self):
@@ -199,7 +205,8 @@ class Ingest(house_state.Listener):
                 elif path.startswith("devices/"):
                     parts[path] = dict(h.devices[path.split("/", 1)[1]])
             if "power_w" in dirty or any(p.startswith("devices/") for p in dirty):
-                parts["power_w"] = round(sum(st.get("watts") or 0 for st in h.devices.values()), 2)
+                parts["power_w"] = round(BASE_W + sum(st.get("watts") or 0 for st in h.devices.values()), 2)
+                parts["base_w"] = BASE_W
             nodes = {p.split("/", 1)[1]: dict(h.nodes[p.split("/", 1)[1]]) for p in dirty if p.startswith("nodes/")}
         if parts:
             self.w.patch_home_state(parts)
@@ -207,6 +214,66 @@ class Ingest(house_state.Listener):
             self.w.set_node(node, n["online"], config_version=n["version"])
         if self.args.verbose:
             say("-> firebase", ", ".join(sorted(parts)) or "-", "· nodes:", ", ".join(nodes) or "-")
+
+    # ------------------------------------------------------------------ energy + summaries (the app's history)
+    def safe(self, fn, *a, **kw):
+        """Firebase may be unreachable (no internet): the counting goes on, the next write catches up."""
+        try:
+            return fn(*a, **kw)
+        except Exception as e:  # noqa: BLE001
+            say("!! Firebase:", type(e).__name__, e)
+            return None
+
+    def count_energy(self):
+        """Wh = watts x time, per device (what its INA226 measures) and for the hub itself (_base)."""
+        now = self.clock()
+        if self.energy_t is None:
+            if self.sim and not self.sim.ready.is_set():
+                return
+            self.energy_day = firebase_writer.day_key(now)
+            self.energy = dict(self.safe(self.w.get_energy_day, self.energy_day) or {})
+            self.energy_t = now
+            return
+        with self.lock:
+            # at most a minute per step: a clock jump (tests) or a pause must not add hours at once
+            dt = min(60.0, max(0.0, now - self.energy_t))
+            self.energy_t = now
+            for dev, st in self.house.devices.items():
+                if st.get("watts"):
+                    self.energy[dev] = self.energy.get(dev, 0.0) + st["watts"] * dt / 3600
+            self.energy["_base"] = self.energy.get("_base", 0.0) + BASE_W * dt / 3600
+
+    def each_minute(self):
+        """Once per house minute: /summaries/{room}/{day}/{HH:MM} (the room's day for the app's charts) and
+        /energy_daily/{day} (the Energy screen). A new day starts the counter again at midnight."""
+        now = self.clock()
+        minute = int(now // 60)
+        if minute == self.minute or self.energy_t is None:
+            return
+        self.minute = minute
+        h, rows = self.house, []
+        with self.lock:
+            for rid, room in self.config["rooms"].items():
+                s = h.rooms.get(rid)
+                if not room.get("sensors") or s is None or not h.nodes.get(room.get("node"), {}).get("online"):
+                    continue
+                devs = [d for d in (room.get("devices") or {}) if d in h.devices]
+                data = {k: s[k] for k in ("temp", "hum", "lux", "occ") if s.get(k) is not None}
+                data["watts"] = round(sum(h.devices[d].get("watts") or 0 for d in devs), 2)
+                dv = {d: int(h.devices[d].get("v") or 0) for d in devs
+                      if "lock" not in (h.dev_cfg(d).get("caps") or {})}
+                if dv:
+                    data["dev"] = dv
+                rows.append((rid, data))
+            day = firebase_writer.day_key(now)
+            energy_day, energy = self.energy_day, dict(self.energy)   # (yesterday's last minute at midnight)
+            if day != self.energy_day:                          # midnight: yesterday is complete, today from 0
+                self.energy_day, self.energy = day, {}
+        for rid, data in rows:
+            self.safe(self.w.write_summary, rid, now, data)
+        self.safe(self.w.write_energy_day, energy_day, energy)
+        if energy_day != day:
+            say("new day:", day, "— the energy counter starts again")
 
     def check_config(self):
         """The app (Add device, Settings) changed /config: reload it and send the nodes their new part."""
@@ -291,6 +358,10 @@ def main():
             if now - last["flush"] >= FLUSH_S:
                 ing.flush()
                 last["flush"] = now
+            if now - last.get("energy", 0) >= (0.25 if sim else ENERGY_S):
+                ing.count_energy()
+                ing.each_minute()
+                last["energy"] = now
             if now - last["snap"] >= SNAPSHOT_S:
                 ing.snapshot()
                 last["snap"] = now
