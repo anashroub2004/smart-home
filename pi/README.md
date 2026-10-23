@@ -9,6 +9,7 @@
 | `mqtt_ingest.py` | **خدمة Pi** (1b): MQTT ← SQLite (للـ AI) + `/home_state` + `/nodes` + `/events` (زر الجدار، عقدة offline)، ويرسل لكل عقدة جزأها من `/config` |
 | `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
 | `automation.py` | **خدمة Pi** (1d): العقل. القواعد (1d-1) + الـ AI الحقيقي (1d-2: plan كل 15 د، tick كل 5 ث، الأسئلة، التدريب 03:00، نماذج `ai/models/home`). يرى البيت بنفسه عبر MQTT، وينفّذ بـ `src: rule` / `ai`، ويحترم التحكم اليدوي و`/ai_pause`. خيارات: `--no-ai`، `--train-now`، `--ask DEVICE` |
+| `world.py` | **العالم**: أحمد (روتين `ai/personas`)، وما تراه الحساسات (حضور، حرارة ورطوبة بقصور الغرفة، ضوء النهار)، وما يفعله بيده (أزرار، أجهزة من خطة يومه). مصدر واحد لـ `sim_house.py` و`fake_nodes.py --world` |
 | `house_state.py` | "صورة البيت" من رسائل العقد (من في الغرفة، حرارة، أجهزة) — نفس الكود لـ `mqtt_ingest` و`automation` |
 | `mqtt_exec.py` | `MqttExecutor`: "أرسل `set` وانتظر رد العقدة 5 ثوانٍ" — لـ `commands` و`automation` |
 | `house_words.py` | كلمات History المشتركة بين الخدمات ("Living room fan"، "On · Medium") |
@@ -18,8 +19,9 @@
 ```bash
 # نافذة 1: Firebase المحلي
 firebase emulators:start --only auth,database
-# نافذة 2: العقد الوهمية (help: press، move، finger، unplug، mute ...)
-python pi/fake_nodes.py
+# نافذة 2: العقد الوهمية — مع أحمد (روتينه، الحرارة، الإضاءة، أزراره) من pi/world.py
+python pi/fake_nodes.py --world
+#   (بدون --world: شخص عشوائي بسيط. help: press، move، routine، hotter، finger، unplug، mute ...)
 # نافذة 3: الأذن — تملأ /config وحساب owner في Firebase فارغ
 python pi/mqtt_ingest.py
 # نافذة 4: اليد

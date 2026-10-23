@@ -32,8 +32,11 @@ What each node does (topics from docs/contract.md):
     home/door/event                  {"type": "fingerprint" | "keypad" | "exit_button", "ok": .., "id": ..}
     home/door/open                   <- from the Pi: open the door (the app's "unlock")
 
-The readings are deliberately simple (stage 1a): one person who wanders between rooms, temperatures
-that drift slowly, daylight from the clock. The simulated person of the digital twin moves in later (1e).
+By default the readings are deliberately simple (stage 1a): one person who wanders between rooms,
+temperatures that drift slowly, daylight from the clock. With --world (stage 1e) the digital twin's person
+lives here instead — his routine file, the rooms' temperatures, humidity and daylight, his wall buttons —
+from pi/world.py, the same code the simulator runs:
+    python pi/fake_nodes.py --world
 Needs: pip install "paho-mqtt>=2.0,<3"
 """
 import argparse
@@ -110,12 +113,143 @@ class World:
             self.where = room
             self.next_move = time.time() + 600              # stay there 10 min when you put him somewhere
 
+    def set_temp(self, rid, value):
+        self.temp[rid] = value
+
     @staticmethod
     def daylight():
         """Lux through the window from the local clock: 0 at night, up to ~400 at noon."""
         t = time.localtime()
         h = t.tm_hour + t.tm_min / 60
         return 0.0 if not 6 <= h <= 18 else 400 * math.sin(math.pi * (h - 6) / 12)
+
+    def reading(self, node, rid, kind):
+        """What the sensor `kind` in room `rid` reads now (node: the FakeNode the room belongs to)."""
+        rc = node.rooms[rid]
+        here = self.where == rid
+        if kind == "temp":
+            return self.temp[rid]
+        if kind == "hum":
+            return self.hum[rid]
+        if kind == "lux":
+            lights_on = any(d["v"] for d in node.devices.values() if d["room"] == rid and d["cfg"].get("icon") == "light")
+            return (0 if rc.get("windowless") else self.daylight()) + (LIGHT_LUX if lights_on else 0)
+        if kind == "mmwave":
+            return 1 if here else 0                                    # the radar also sees you sitting still
+        return 1 if here and random.random() < 0.6 else 0              # the PIR only sees movement
+
+
+class AhmedWorld:
+    """--world: the simulated person of the digital twin lives here (pi/world.py, the routine file), and the
+    fake nodes publish what his world shows. Real time (stage 1e-1); a shared fast clock comes in 1e-2.
+    This object is the `h` that pi/world.py works on."""
+
+    def __init__(self, config, nodes):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        global world, OUT
+        import house_words
+        import world
+        from ai.persona import Persona
+        from person import OUT, Person
+        self.words, self.nodes = house_words, nodes
+        self.lock = threading.Lock()
+        self.config, self.th = config, config.get("thresholds") or {}
+        index = house_words.device_index(config)
+        self.dev_room = {d: rid for d, (rid, _) in index.items()}
+        self.dev_cfg = {d: cfg for d, (_, cfg) in index.items()}
+        self.persona = Persona.load(None)
+        self.person = Person(config, persona=self.persona)
+        self.speedup = 1
+        self.rooms = {rid: {} for rid in config["rooms"]}
+        self.temp_delta, self.sensor_t, self.bed_since = 0.0, None, None
+        self.dark_since, self.bed_forgets, self.intents_done, self.override_until = {}, {}, set(), {}
+        say("world", "**", "Ahmed lives here:", f"{self.persona.d['person']['name']} · routine {self.persona.source}")
+
+    # ---- what pi/world.py reads
+    def now(self):
+        return time.time()
+
+    def vnow(self):
+        from datetime import datetime
+        return datetime.fromtimestamp(self.now())
+
+    @property
+    def devices(self):
+        """Every device's state, from the node that drives it ({"v": 0} for a node that is not running)."""
+        out = {d: {"v": 0} for d in self.dev_cfg}
+        for n in self.nodes.values():
+            out.update(n.devices)
+        return out
+
+    @property
+    def offline(self):
+        return {n for n in (self.config.get("nodes") or {}) if n not in self.nodes or not self.nodes[n].client}
+
+    def icon(self, d):
+        return self.dev_cfg[d].get("icon")
+
+    def writable(self, d):
+        return (self.dev_cfg[d].get("caps") or {}).get("power") == "write"
+
+    def ctrl(self, d):
+        return self.dev_cfg[d].get("control") or {}
+
+    def node_of(self, d):
+        return self.config["rooms"][self.dev_room[d]].get("node")
+
+    def room_name(self, rid):
+        return self.config["rooms"][rid]["name"]
+
+    def mid_level(self, d):
+        lv = (self.dev_cfg[d].get("caps") or {}).get("level")
+        return lv["steps"][len(lv["steps"]) // 2] if lv else None
+
+    # ---- what Ahmed does (pi/world.py calls these)
+    def person_switch(self, dev, v, level=None, source="button", why="", **_):
+        node = self.nodes.get(self.node_of(dev))
+        if not node or not node.client:
+            return
+        say("world", "**", f"Ahmed: {dev} {'on' if v else 'off'}", f"({source}: {why})")
+        if source in ("button", "web"):
+            self.override_until[dev] = self.now() + float(self.th.get("override_pause_min", 120)) * 60
+        node.switch(dev, {"v": v, "level": level}, src=source)
+
+    def person_moved(self, old, new):
+        say("world", "**", f"Ahmed: {old or '-'} -> {new}", f"({self.person.activity})")
+
+    def door(self):
+        return next((n for n in self.nodes.values() if n.lock_dev() and n.client), None)
+
+    def person_left_home(self):
+        if self.door():
+            self.door().door_event("exit_button", True)
+
+    def person_came_home(self):
+        if self.door():
+            self.door().door_event("fingerprint", True, 1)
+
+    def end_hands_off(self, rid):
+        for dev in (self.config["rooms"].get(rid, {}).get("devices") or {}):
+            self.override_until.pop(dev, None)
+
+    def kpi_add(self, key, n=1):
+        pass
+
+    # ---- what the fake nodes read
+    def tick(self):
+        with self.lock:
+            world.person_tick(self)
+            world.sense(self)
+
+    def reading(self, node, rid, kind):
+        return self.rooms.get(rid, {}).get(kind)
+
+    def move(self, room):
+        self.person.take_over(OUT if room == "out" else room)
+
+    def set_temp(self, rid, value):
+        raise ValueError("with --world the rooms follow the weather: use 'hotter <°C>' (0 = normal)")
 
 
 # ------------------------------------------------------------------ one fake ESP32
@@ -328,22 +462,17 @@ class FakeNode:
         w = self.world
         for rid, rc in self.rooms.items():
             sensors = rc.get("sensors") or []
-            here = w.where == rid
-            if "temp" in sensors:
-                self.publish(f"home/{rid}/temp", f"{w.temp[rid]:.1f}")
-            if "hum" in sensors:
-                self.publish(f"home/{rid}/hum", f"{w.hum[rid]:.0f}")
-            if "lux" in sensors:
-                lights_on = any(d["v"] for d in self.devices.values()
-                                if d["room"] == rid and d["cfg"].get("icon") == "light")
-                lux = (0 if rc.get("windowless") else w.daylight()) + (LIGHT_LUX if lights_on else 0)
-                self.publish(f"home/{rid}/lux", f"{round(lux / 10) * 10:.0f}")     # BH1750, 10 lx steps
+            fmt = {"temp": lambda v: f"{v:.1f}", "hum": lambda v: f"{v:.0f}",
+                   "lux": lambda v: f"{round(v / 10) * 10:.0f}"}                    # BH1750, 10 lx steps
+            for kind in ("temp", "hum", "lux"):
+                if kind in sensors:
+                    v = w.reading(self, rid, kind)
+                    if v is not None:
+                        self.publish(f"home/{rid}/{kind}", fmt[kind](v))
             for s in presence_sensors(rc):
-                if s == "mmwave":
-                    v = 1 if here else 0                                   # the radar also sees you sitting still
-                else:
-                    v = 1 if here and random.random() < 0.6 else 0          # the PIR only sees movement
-                self.publish(f"home/{rid}/{s}", str(v))
+                v = w.reading(self, rid, s)
+                if v is not None:
+                    self.publish(f"home/{rid}/{s}", str(int(v)))
         for dev in self.devices:
             if self.is_lock(dev) and self.devices[dev]["v"] and time.time() >= self.lock_open_until:
                 self.devices[dev]["v"] = 0                                  # the door locks itself again
@@ -379,6 +508,7 @@ HELP = """commands:
   unplug <node>         power cut: the broker announces "offline" by itself (last will)
   plug <node>           power back: the node connects again
   mute <node>           the node hangs: still online, but answers no order (unmute <node> to fix)
+  with --world:  move <room|out> takes Ahmed out of his routine, routine gives it back, hotter <°C> warms every room
   quit"""
 
 
@@ -414,7 +544,12 @@ def console(nodes, world, config, stop):
                 else:
                     world.move(rest[0])
             elif cmd == "temp" and len(rest) == 2:
-                world.temp[rest[0]] = float(rest[1])
+                world.set_temp(rest[0], float(rest[1]))
+            elif cmd == "hotter" and rest and isinstance(world, AhmedWorld):
+                world.temp_delta = float(rest[0])
+            elif cmd == "routine" and isinstance(world, AhmedWorld):
+                world.person.give_back()
+                print("Ahmed follows his routine again", flush=True)
             elif cmd in ("finger", "pin", "exit"):
                 n = door()
                 if not n:
@@ -453,14 +588,17 @@ def main():
     ap.add_argument("--broken", action="append", default=[],
                     help="a reading that never arrives, e.g. bathroom/temp or living_fan/power")
     ap.add_argument("--verbose", action="store_true", help="also print heartbeats (unchanged values)")
+    ap.add_argument("--world", action="store_true",
+                    help="Ahmed (the digital twin's person, his routine file) lives in the house: pi/world.py")
     args = ap.parse_args()
 
     config = load_config(args.config)
     names = [n for n in (config.get("nodes") or {}) if (not args.only or n in args.only) and n not in args.offline]
     if not names:
         sys.exit("no node to run (check --only / --offline)")
-    world = World(config)
-    nodes = {n: FakeNode(n, config, world, args) for n in names}
+    nodes = {}
+    world = AhmedWorld(config, nodes) if args.world else World(config)
+    nodes.update({n: FakeNode(n, config, world, args) for n in names})
     for n in nodes.values():
         rooms = ", ".join(f"{r} ({', '.join(rc.get('sensors') or []) or 'no sensors'})" for r, rc in n.rooms.items())
         with PRINT_LOCK:

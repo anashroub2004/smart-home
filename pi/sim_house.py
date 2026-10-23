@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import firebase_writer  # noqa: E402
+import world  # noqa: E402
 from firebase_writer import Writer, day_key, now_ms  # noqa: E402
 from person import OUT, Person  # noqa: E402
 from rest_db import PROJECT_ID, RestDB  # noqa: E402
@@ -59,9 +60,6 @@ SEED = ROOT / "docs" / "seed.json"
 AUTH_URL = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1"
 OWNER_EMAIL, OWNER_PASSWORD = "owner@home.test", "password123"
 TICK_S = 0.25
-DARK_PATIENCE_S = 180            # the person switches the light on himself after 3 min in the dark
-BED_FORGET = 0.3                 # some nights he falls asleep with the light on
-PIR_RATE = 12.0                  # PIR movements per minute = 12 x (1 - still)^2
 BASE_W = 6.8            # Raspberry Pi + 3 ESP32 nodes + sensors
 
 
@@ -201,9 +199,6 @@ def backfill_energy(w, config):
                 if cfg.get("watts"):
                     per[dev] = cfg["watts"] * random.uniform(1, 7)  # 1–7 h of use
         w.write_energy_day(day, per)
-
-
-WINDOW = {"living": 0.75, "kitchen": 0.5, "bedroom": 0.6, "bathroom": 0.0}   # share of daylight per room
 
 
 def load_persona(args):
@@ -418,73 +413,7 @@ class House:
 
     # ------------------------------------------------ sensors
     def update_sensors(self):
-        now = vnow()
-        t = CLOCK.now()
-        sens_dt = min(60.0, max(1.0, t - (self.sensor_t or t - 5)))   # seconds since the last reading
-        self.sensor_t = t
-        h = now.hour + now.minute / 60
-        today = now.date()
-        if self.persona is not None:          # seasons, sunset and weather of the routine file (= the AI's history)
-            outdoor = self.persona.outdoor(today, h) + self.temp_delta
-            sun_lux = self.persona.daylight(today, h)
-            rh_out = self.persona.rh_out(today, h)
-        else:
-            outdoor = 27 + 4 * math.sin((h - 9) / 24 * 2 * math.pi) + self.temp_delta
-            sun_lux = 600 * (max(0.0, math.sin((h - 6) / 13 * math.pi)) if 6 <= h <= 19 else 0)
-            rh_out = None
-        act, here = self.person.activity, self.person.room
-        for rid, room in self.config["rooms"].items():
-            if room["node"] in self.offline:
-                continue
-            s = self.rooms[rid]
-            sensors = room.get("sensors", [])
-            if "occ" in sensors:
-                new = int(self.person.room == rid)            # the simulated person is in this room
-                if new and not s.get("occ"):
-                    s["motion_at"] = now_ms()
-                    s["entry_pending"] = True                 # "on when dark" looks at every entry once
-                if new != s.get("occ"):
-                    s["occ_since"] = now_ms()
-                if s.get("occ") and not new:
-                    self.end_hands_off(rid)                  # you left: the 2 h hands-off ends with your visit
-                s["occ"] = new
-                s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
-                hw = room.get("hardware", [])
-                if "C1001 mmWave" in hw:
-                    s["mmwave"] = new                            # the radar also sees people sitting still
-                if "PIR" in hw:                                  # PIR only sees movement: it misses still people
-                    # movements per minute: walking ~10/min, TV ~2/min, reading ~0.5/min, asleep ~0.1/min
-                    rate = PIR_RATE * (1 - self.person.still) ** 2
-                    s["pir"] = int(bool(new) and random.random() < 1 - math.exp(-rate * sens_dt / 60))
-            devs = room.get("devices") or {}
-            fan_on = any(self.devices[d]["v"] and self.icon(d) in ("fan", "ac") for d in devs)
-            if self.persona is not None:      # inertia like the real room (and like ai/lifesim.py)
-                target = self.persona.indoor_target(today, h, rid) - (1.4 if fan_on else 0)
-                if rid == "kitchen" and here == rid and act.startswith("Cooking"):
-                    target += 2.5
-                if rid == "bathroom" and here == rid and act == "Shower":
-                    target += 3.0
-                k = 1 - math.exp(-sens_dt / 7200)
-                s["_t"] = s.get("_t", target) + (target - s.get("_t", target)) * k
-                base_h = rh_out * 0.75 + 8
-                vent = rid == "bathroom" and any(self.devices[d]["v"] and self.icon(d) == "vent" for d in devs)
-                goal, rate = ((93, 0.18) if rid == "bathroom" and here == rid and act == "Shower"
-                              else (base_h, 0.09 if vent else 0.025))
-                s["_h"] = s.get("_h", base_h) + (goal - s.get("_h", base_h)) * (1 - (1 - rate) ** (sens_dt / 60))
-            if "temp" in sensors:
-                if self.persona is not None:
-                    # the twin's "hotter / cooler" control (and the scenarios) act at once, outside the room's inertia
-                    s["temp"] = round(s["_t"] + self.temp_delta + random.gauss(0, 0.08), 1)
-                else:
-                    s["temp"] = round(outdoor + (0.8 if rid == "bedroom" else 0) + (-1.2 if fan_on else 0)
-                                      + random.gauss(0, 0.12), 1)
-            if "hum" in sensors:
-                s["hum"] = round(s["_h"] + random.gauss(0, 0.6)) if self.persona is not None else \
-                    round(50 - (outdoor - 27) * 1.5 + random.gauss(0, 1))
-            if "lux" in sensors:
-                lights = 250 if any(self.devices[d]["v"] and self.icon(d) == "light" for d in devs) else 0
-                share = 0.0 if room.get("windowless") else WINDOW.get(rid, 0.6)
-                s["lux"] = round(max(0, sun_lux * share + lights + random.gauss(0, 6)))
+        world.sense(self)                     # the person + the room physics: pi/world.py (also the fake nodes')
 
     def update_power(self, dt):
         total = BASE_W
@@ -993,77 +922,43 @@ class House:
 
     # ------------------------------------------------ the person (digital twin)
     def person_tick(self):
-        """Move the person along today's routine; doors, light switches and the TV follow what he does."""
-        moved = self.person.step(CLOCK.now())
-        self.dark_habit()
-        self.bed_habit()
-        self.appliance_tick()
-        if not moved:
-            return
-        old, new = moved
+        """Move the person along today's routine (pi/world.py); doors, switches and appliances follow."""
+        world.person_tick(self)
+
+    # the world's hooks (pi/world.py calls these on its house)
+    def now(self):
+        return CLOCK.now()
+
+    def vnow(self):
+        return vnow()
+
+    def person_switch(self, dev, v, level=None, **why):
+        self.set_device(dev, v, level, **why)
+
+    def person_moved(self, old, new):
         self.changes.append((CLOCK.now(), "room", "person", new))
-        if old and old != OUT and self.person.habits:
-            self.leave_room_habits(old)
-        if new == OUT and old is not None:                     # leaving: exit button, camera sees him
-            if self.lock_id and "door" not in self.offline:
-                self.open_door("exit_button")
-            self.entrance_motion()
-        elif old == OUT:                                       # coming home: fingerprint
-            if self.lock_id and "door" not in self.offline:
-                fingers = self.fingerprints()
-                finger = next(iter(fingers))
-                self.open_door("fingerprint", fingers[finger], finger=finger)
-            else:
-                self.door_entry_at = CLOCK.now()
-            self.entrance_motion()
+
+    def person_left_home(self):
+        """Leaving: exit button, the camera sees him."""
+        if self.lock_id and "door" not in self.offline:
+            self.open_door("exit_button")
+        self.entrance_motion()
+
+    def person_came_home(self):
+        """Coming home: fingerprint."""
+        if self.lock_id and "door" not in self.offline:
+            fingers = self.fingerprints()
+            finger = next(iter(fingers))
+            self.open_door("fingerprint", fingers[finger], finger=finger)
+        else:
+            self.door_entry_at = CLOCK.now()
+        self.entrance_motion()
 
     def leave_room_habits(self, rid, always=False, lights_only=False):
-        """Like a real person: usually switches the light off when leaving, sometimes forgets (the AI's job)."""
-        for dev in (self.config["rooms"].get(rid, {}).get("devices") or {}):
-            if lights_only and self.icon(dev) != "light":
-                continue
-            st = self.devices.get(dev) or {}
-            if not st.get("v") or not self.writable(dev) or not self.ctrl(dev).get("button"):
-                continue
-            if self.node_of(dev) in self.offline:
-                continue
-            chance = 1.0 if always else 0.6 if self.icon(dev) == "light" else 0.3
-            if random.random() < chance:
-                self.set_device(dev, 0, source="button", src_label="Button", group="manual",
-                                by_label="Someone at home (button)",
-                                short=f"Wall button in the {self.room_name(rid).lower()}",
-                                why="Switched off before sleeping" if always else "Switched off when leaving the room",
-                                tags=["manual"])
+        world.leave_room_habits(self, rid, always, lights_only)
 
     def bed_habit(self):
-        """Lying down to sleep with the light on: most nights he switches it off himself after a minute or two,
-        some nights he falls asleep with it on (decided once per night) — the case the AI must learn to handle."""
-        p = self.person
-        if p.activity != "Sleeping" or p.manual or not p.habits:
-            self.bed_since = None
-            return
-        now = CLOCK.now()
-        night = vnow().date() if vnow().hour >= 12 else (vnow() - timedelta(days=1)).date()
-        lights = [d for d in (self.config["rooms"].get(p.room, {}).get("devices") or {})
-                  if self.icon(d) == "light" and self.devices[d]["v"] and self.writable(d) and self.ctrl(d).get("button")]
-        if not lights:
-            self.bed_since = None
-            return
-        self.bed_since = self.bed_since or now
-        if self.bed_forgets.get(night) is None:
-            plan = self.person.plan(now) if self.persona is not None else None
-            if plan is not None:      # the routine file decides (the same nights the AI's history has)
-                off = plan.light_off_at_bed if vnow().hour >= 12 else plan.light_off_prev_night
-                self.bed_forgets = {night: not off}
-            else:
-                self.bed_forgets = {night: random.random() < BED_FORGET}
-        if not self.bed_forgets[night] and now - self.bed_since >= 90 / self.speedup:
-            for d in lights:
-                self.set_device(d, 0, source="button", src_label="Button", group="manual",
-                                by_label="Someone at home (button)", short=f"Wall button in the {self.room_name(p.room).lower()}",
-                                why="Switched off after lying down to sleep", tags=["manual"])
-                self.kpi_add("manual_fix")
-            self.bed_since = None
+        world.bed_habit(self)
 
     # ------------------------------------------------ learning curve (per day) + simulated answers
     KPI_AI = ("suggested", "accepted", "dismissed", "expired", "ai_on", "ai_entry_on", "ai_entry_skip", "smart_off",
@@ -1113,19 +1008,7 @@ class House:
         return out
 
     def wants(self, dev, action):
-        """What the simulated person would answer: does he want this device on / off right now?"""
-        p, rid = self.person, self.dev_room.get(dev)
-        here = p.room == rid
-        if action == "off":
-            return not here or p.activity == "Sleeping"
-        if not here or p.activity == "Sleeping":
-            return False
-        s = self.rooms.get(rid) or {}
-        if self.icon(dev) == "light":
-            return s.get("lux", 0) < self.th["light_on_lux"]
-        if self.icon(dev) in ("fan", "ac"):
-            return s.get("temp", 0) > self.th["fan_on_temp"]
-        return True
+        return world.wants(self, dev, action)
 
     def simulated_answers(self):
         """In the twin (and with --auto-answer) the simulated person answers the AI's questions after 1-4 min,
@@ -1156,80 +1039,13 @@ class House:
                             short="Suggestion approved", confidence=s.get("confidence"), tags=["ai", "manual"])
 
     def room_lux(self, rid):
-        """Light level for the rules / the person: own BH1750, else dark if windowless, else a neighbour's."""
-        room = self.config["rooms"].get(rid) or {}
-        own = (self.rooms.get(rid) or {}).get("lux")
-        if own is not None:
-            return own
-        if room.get("windowless"):
-            return 0
-        for r, rc in self.config["rooms"].items():
-            if "lux" in (rc.get("sensors") or []) and (self.rooms.get(r) or {}).get("lux") is not None:
-                return self.rooms[r]["lux"] - (250 if any(self.devices[d]["v"] and self.icon(d) == "light"
-                                                          for d in (rc.get("devices") or {})) else 0)
-        return None
+        return world.room_lux(self, rid)
 
     def appliance_tick(self):
-        """Appliance use from today's plan in the routine file: hood while cooking, exhaust fan after a shower,
-        laundry, the app pre-cooling the living room on hot afternoons. Same plan the AI's history came from."""
-        plan = self.person.plan(CLOCK.now()) if self.persona is not None else None
-        if plan is None or self.person.manual or not self.person.habits:
-            return
-        now = vnow()
-        h = now.hour + now.minute / 60 + now.second / 3600
-        for n, i in enumerate(plan.intents):
-            role = i["role"]
-            if role.startswith("_") or role == "kettle":
-                continue
-            devs = [d for d in self.dev_cfg if self.icon(d) == role and self.writable(d)] if role != "fan" else \
-                [d for d in (self.config["rooms"].get(i.get("room", "living"), {}).get("devices") or {})
-                 if self.icon(d) == "fan" and self.writable(d)]
-            for edge, at, v in (("on", i["on"], 1), ("off", i.get("off"), 0)):
-                key = (plan.date, n, edge)
-                if at is None or key in self.intents_done or h < at or h > at + 0.5:
-                    continue
-                self.intents_done.add(key)
-                for dev in devs:
-                    if self.node_of(dev) in self.offline or self.devices[dev]["v"] == v:
-                        continue
-                    app = i.get("how") == "app"
-                    self.set_device(dev, v, self.mid_level(dev) if v else None, source="web" if app else "button",
-                                    src_label="App" if app else "Button", group="manual",
-                                    by_label="Owner (app)" if app else "Someone at home (button)",
-                                    short=("Started from the app before coming home" if app else
-                                           f"Wall button in the {self.room_name(self.dev_room[dev]).lower()}"),
-                                    why={"hood": "Cooking", "vent": "After a shower", "washer": "Laundry",
-                                         "fan": "Hot afternoon: pre-cooling"}.get(role, "Daily routine")
-                                    + (" (forgot to switch it off)" if (edge == "off" and i.get("forgot")) else ""),
-                                    tags=["manual"])
-        if len(self.intents_done) > 400:
-            self.intents_done = {k for k in self.intents_done if k[0] == plan.date}
+        world.appliance_tick(self)
 
     def dark_habit(self):
-        """Like a real person: awake in a dark room with the light off, he presses the wall switch himself
-        after a few minutes (only if the rules / AI did not). Not if he switched it off himself in this room."""
-        rid, now = self.person.room, CLOCK.now()
-        room = self.config["rooms"].get(rid) or {}
-        lux = self.room_lux(rid)
-        if not self.person.habits or self.person.activity == "Sleeping" or lux is None or lux >= self.th["light_on_lux"] \
-                or room.get("node") in self.offline:
-            self.dark_since.pop(rid, None)
-            return
-        lights = [d for d in (room.get("devices") or {}) if self.icon(d) == "light" and self.writable(d)
-                  and self.ctrl(d).get("button") and self.node_of(d) not in self.offline]
-        off = [d for d in lights if not self.devices[d]["v"]
-               and not (self.devices[d].get("src") == "button" and now < self.override_until.get(d, 0))]
-        if not off or len(off) < len(lights):                # a light is on, or he wants it dark
-            self.dark_since.pop(rid, None)
-            return
-        since = self.dark_since.setdefault(rid, now)
-        if now - since >= DARK_PATIENCE_S / self.speedup:
-            self.dark_since.pop(rid, None)
-            self.kpi_add("manual_fix")
-            self.set_device(off[0], 1, self.mid_level(off[0]), source="button", src_label="Button", group="manual",
-                            by_label="Someone at home (button)",
-                            short=f"Wall button in the {self.room_name(rid).lower()}",
-                            why=f"Too dark ({lux} lx) and nothing switched the light on", tags=["manual"])
+        world.dark_habit(self)
 
     def press_button(self, dev):
         """Twin control: the person presses a wall button."""
