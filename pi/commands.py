@@ -83,10 +83,9 @@ class Commands:
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-commands")
         c.on_connect = self.on_connect
         c.on_message = self.on_message
+        self.client, self.ex = c, MqttExecutor(c, NODE_TIMEOUT_S)    # ready before the first message arrives
         c.connect(self.args.host, self.args.port, keepalive=30)
         c.loop_start()
-        self.client = c
-        self.ex = MqttExecutor(c, NODE_TIMEOUT_S)
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:

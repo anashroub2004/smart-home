@@ -222,17 +222,25 @@ class AIRuntime:
 
     # ------------------------------------------------------------------ training
     def bootstrap_if_needed(self, now=None, quiet=False):
-        """A fresh hub has no history: fill simulated history (clearly labelled 'simulated') and train."""
+        """A fresh hub has no history: fill simulated history (clearly labelled 'simulated') and train.
+        A hub whose services already record real readings (mqtt_ingest) but for less than MIN_DAYS gets the
+        simulated weeks BEFORE its first real reading — real readings are never touched, and they take over
+        night after night as the 16-week window moves on."""
         from . import synth
         now = now or self.clock()
-        if self.con.execute("SELECT COUNT(*) FROM readings").fetchone()[0] == 0:   # never wipe real readings
+        first, last = self.con.execute("SELECT MIN(ts), MAX(ts) FROM readings").fetchone()
+        young = first is not None and last - first < S.MIN_DAYS * 86400 and store.get_meta(self.con, "synth_until") is None
+        if first is None or young:
+            end = first if young else now
             if not quiet:
-                print(f"AI: empty history — generating {(S.WINDOW_DAYS + 14) // 7} weeks of simulated history (labelled 'simulated')")
+                print(f"AI: {'only ' + str(round((last - first) / 86400, 1)) + ' days of' if young else 'empty'} history — "
+                      f"generating {(S.WINDOW_DAYS + 14) // 7} weeks of simulated history"
+                      f"{' before the first real reading' if young else ''} (labelled 'simulated')")
             if self.persona is not None:              # the person from the routine file (same as the digital twin)
                 from . import lifesim
-                lifesim.fill(self.con, self.config, self.persona, days=S.WINDOW_DAYS + 14, end_ts=now)
+                lifesim.fill(self.con, self.config, self.persona, days=S.WINDOW_DAYS + 14, end_ts=end)
             else:
-                synth.fill(self.con, self.config, days=S.WINDOW_DAYS + 14, end_ts=now - 300, replace=False)
+                synth.fill(self.con, self.config, days=S.WINDOW_DAYS + 14, end_ts=end - 300, replace=False)
         trained = self.report.get("trained_at", 0) / 1000
         devices_changed = set(self.report.get("devices", {})) != set(self.specs)
         missing = any(self.bundles.get(d) is None and (self.report.get("devices", {}).get(d) or {}).get("status")

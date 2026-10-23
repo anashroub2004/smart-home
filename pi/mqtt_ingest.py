@@ -97,9 +97,9 @@ class Ingest(house_state.Listener):
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-mqtt-ingest")
         c.on_connect = self.on_connect
         c.on_message = self.on_message
+        self.client = c          # before loop_start: on_connect (another thread) publishes through self.client
         c.connect(self.args.host, self.args.port, keepalive=30)
         c.loop_start()
-        self.client = c
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:

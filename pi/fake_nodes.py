@@ -163,9 +163,9 @@ class FakeNode:
         c.will_set(f"home/{self.name}/status", "offline", qos=1, retain=True)    # sent by the broker if we vanish
         c.on_connect = self.on_connect
         c.on_message = self.on_message
+        self.client = c          # before loop_start: on_connect (another thread) publishes through self.client
         c.connect(self.args.host, self.args.port, keepalive=KEEPALIVE_S)
         c.loop_start()
-        self.client = c
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:

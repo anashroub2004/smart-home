@@ -174,16 +174,19 @@ class Regressions(unittest.TestCase):
         self.assertTrue(any("expired" in e["title"] for e in (w.db.get("events") or {}).values()))
 
     def test_bootstrap_never_wipes_real_readings(self):
-        """Bug 5: a hub with a few days of real data keeps them."""
+        """Bug 5: a hub with a few days of real data keeps them. (Since 2026-10-23 it also gets simulated weeks
+        BEFORE them — test_bootstrap.py — so the AI decides from day one; the real rows stay as they are.)"""
         con = memory_db()
-        store.write(con, [(NOW - 3 * 86400, "living/temp", 27.0), (NOW, "living/temp", 27.5)])
+        real = [(NOW - 3 * 86400, "living/temp", 27.0), (NOW, "living/temp", 27.5)]
+        store.write(con, real)
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         rt = AIRuntime(config(), con, RecSink(), model_dir=Path(tmp.name), clock=lambda: NOW)
+        rt.retrain = lambda now=None, quiet=False: None
         rt.bootstrap_if_needed(NOW, quiet=True)
-        n = con.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
-        self.assertEqual(n, 2)
-        self.assertEqual(rt.report["status"], "learning")
+        kept = con.execute("SELECT ts, key, value FROM readings WHERE ts >= ? ORDER BY ts",
+                           (NOW - 3 * 86400,)).fetchall()
+        self.assertEqual(kept, real)
 
     def test_times_are_home_time(self):
         """Bug 8: schedule times use Asia/Hebron whatever the machine's time zone."""
