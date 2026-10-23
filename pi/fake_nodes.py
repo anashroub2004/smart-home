@@ -167,7 +167,67 @@ class AhmedWorld:
         self.rooms = {rid: {} for rid in config["rooms"]}
         self.temp_delta, self.sensor_t, self.bed_since = 0.0, None, None
         self.dark_since, self.bed_forgets, self.intents_done, self.override_until = {}, {}, set(), {}
+        self.faults = {}            # device -> "high" (2x power, e.g. a blocked motor) | "dead" | "standby" — tests
+        self.test_client, self.shown = None, None
         say("world", "**", "Ahmed lives here:", f"{self.persona.d['person']['name']} · routine {self.persona.source}")
+
+    # ---- test channel (with --speed): the scenarios move the world through MQTT (pi/scenario_bridge.py)
+    def attach_tests(self, client):
+        """hub/test/world {"do": ...} — take_over, give_back, force_still, habits, temp_delta, fault, set_dev, press,
+        clock. The world's state goes back on hub/test/world/state (retained) whenever it changes."""
+        self.test_client = client
+        client.message_callback_add("hub/test/world", self.on_test)
+        client.subscribe("hub/test/world", qos=1)
+        self.shown = None
+
+    def on_test(self, client, userdata, msg):
+        try:
+            c = json.loads(msg.payload)
+            with self.lock:
+                self.test(c)
+        except Exception as e:  # noqa: BLE001 — a bad test message must not stop the world
+            say("world", "!!", "test command failed:", f"{msg.payload[:80]} ({e})")
+        self.show()
+
+    def test(self, c):
+        do, p = c.get("do"), self.person
+        if do == "take_over":
+            p.take_over(OUT if c["room"] in ("out", OUT) else c["room"], c.get("activity"))
+        elif do == "give_back":
+            p.give_back()
+        elif do == "force_still":
+            p.force_still = c.get("v")
+        elif do == "habits":
+            p.habits = bool(c.get("v"))
+        elif do == "temp_delta":
+            self.temp_delta = float(c.get("v", 0))
+        elif do == "faults":
+            self.faults = dict(c.get("v") or {})
+        elif do in ("set_dev", "press"):
+            node = self.nodes.get(self.node_of(c["dev"]))
+            if node and node.client:
+                if do == "press":
+                    node.press(c["dev"])
+                else:                                   # the scenario sets it up: not a manual action
+                    node.switch(c["dev"], {"v": c["v"], "level": c.get("level")}, src=c.get("src", "system"))
+        elif do == "clock" and self.clock:
+            op, arg = c.get("op"), c.get("arg")
+            {"jump": lambda: self.clock.jump_to(arg), "forward": lambda: self.clock.forward(float(arg)),
+             "speed": lambda: self.clock.set_speed(float(arg)), "pause": lambda: self.clock.pause(True),
+             "resume": lambda: self.clock.pause(False)}[op]()
+        # a person taken over moves on the world's next tick (a quarter second), like in the twin
+
+    def show(self):
+        """Publish what the scenarios need to know about the world, when it changed."""
+        if not self.test_client:
+            return
+        p = self.person
+        state = {"room": p.room, "activity": p.activity, "still": p.still, "manual": bool(p.manual),
+                 "force_still": p.force_still, "habits": p.habits, "temp_delta": self.temp_delta, "faults": self.faults}
+        body = json.dumps(state, sort_keys=True)
+        if body != self.shown:
+            self.shown = body
+            self.test_client.publish("hub/test/world/state", body, qos=1, retain=True)
 
     # ---- what pi/world.py reads
     def now(self):
@@ -244,6 +304,7 @@ class AhmedWorld:
         with self.lock:
             world.person_tick(self)
             world.sense(self)
+        self.show()
 
     def reading(self, node, rid, kind):
         return self.rooms.get(rid, {}).get(kind)
@@ -389,9 +450,11 @@ class FakeNode:
         cfg = d["cfg"]
         rated = float(cfg.get("watts") or 0)
         if self.writable(dev):
+            fault = (getattr(self.world, "faults", None) or {}).get(dev)     # --world tests: a broken device
             if not d["v"]:
-                return 0.0
-            return rated * (d["level"] or 100) / 100 if d["level"] is not None else rated
+                return 1.1 if fault == "standby" else 0.0
+            w = rated * (d["level"] or 100) / 100 if d["level"] is not None else rated
+            return {"high": w * 2.1, "dead": 0.02}.get(fault, w)          # a blocked motor / a burnt bulb
         if self.caps(dev).get("power") == "read":               # monitor only (fridge, kettle)
             on_above = float((cfg.get("hw") or {}).get("on_above_w", 0.5))
             if time.time() < d["busy_until"]:
@@ -622,7 +685,7 @@ def main():
     nodes.update({n: FakeNode(n, config, world, args) for n in names})
     if args.speed:
         clock_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fake-world-clock")
-        clock_client.on_connect = lambda c, *a: world.clock.attach(c)
+        clock_client.on_connect = lambda c, *a: (world.clock.attach(c), world.attach_tests(c))
         clock_client.connect(args.host, args.port, keepalive=30)
         clock_client.loop_start()
         say("world", "**", f"clock x{args.speed:g} on hub/clock", "(services: --sim-clock)")

@@ -10,6 +10,7 @@
 | `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
 | `automation.py` | **خدمة Pi** (1d): العقل. القواعد (1d-1) + الـ AI الحقيقي (1d-2: plan كل 15 د، tick كل 5 ث، الأسئلة، التدريب 03:00، نماذج `ai/models/home`). يرى البيت بنفسه عبر MQTT، وينفّذ بـ `src: rule` / `ai`، ويحترم التحكم اليدوي و`/ai_pause`. خيارات: `--no-ai`، `--train-now`، `--ask DEVICE` |
 | `world.py` | **العالم**: أحمد (روتين `ai/personas`)، وما تراه الحساسات (حضور، حرارة ورطوبة بقصور الغرفة، ضوء النهار)، وما يفعله بيده (أزرار، أجهزة من خطة يومه). مصدر واحد لـ `sim_house.py` و`fake_nodes.py --world` |
+| `scenario_bridge.py`، `run_scenarios.py` | **للاختبار فقط:** سيناريوهات التوأم العشرة على الخدمات الحقيقية (بوابة المرحلة 1) |
 | `hub_clock.py` | **للاختبار فقط:** الساعة المسرّعة المشتركة (`hub/clock`) — العالم ينشرها، والخدمات بـ `--sim-clock` تقرؤها، والـ AI يوقفها أثناء التدريب |
 | `house_state.py` | "صورة البيت" من رسائل العقد (من في الغرفة، حرارة، أجهزة) — نفس الكود لـ `mqtt_ingest` و`automation` |
 | `mqtt_exec.py` | `MqttExecutor`: "أرسل `set` وانتظر رد العقدة 5 ثوانٍ" — لـ `commands` و`automation` |
@@ -44,6 +45,16 @@ python pi/commands.py --sim-clock --db ai/data/home_sim.db
 python pi/automation.py --sim-clock --db ai/data/home_sim.db     # نماذج ai/models/home_sim
 ```
 أثناء تدريب الـ AI (أول تشغيل، و03:00 كل ليلة) يطلب `automation` إيقاف الساعة، فيتوقف يوم أحمد كما في التوأم.
+
+### السيناريوهات العشرة على الخدمات الحقيقية (بوابة المرحلة 1)
+
+مع النوافذ الأربع أعلاه + `commands` (ينفّذ "نعم" على أسئلة الـ AI)، وبعد "AI ready":
+
+```bash
+python pi/run_scenarios.py                         # العشرة — المتوقع: 10 / 10 PASS
+python pi/run_scenarios.py forgot_light guard_hit  # بعضها
+```
+نفس `pi/scenarios.py` الذي يستعمله التوأم، يعمل داخل `automation` عبر `pi/scenario_bridge.py`: العالم يتحرك عبر `hub/test/world`، والقرارات تمر بالطريق الحقيقي (MQTT ← `automation` ← `set` ← العقدة)، وإجاباتك على الأسئلة تُكتب في Firebase كما يفعل التطبيق.
 
 ## العقد الوهمية وحدها
 

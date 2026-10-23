@@ -112,6 +112,9 @@ class Automation(house_state.Listener):
         start = self.clock()        # room -> ts it became empty; nobody seen yet = empty from now on
         self.empty_since = {rid: start for rid in self.house.rooms}
         self.ai, self.ai_errors, self.ai_ready = None, 0, False
+        self.rules_off = set()      # devices a test scenario keeps the comfort rules away from
+        self.counts = {}            # "ai_on", "rule_off", "manual_on", ... (who switched what, for the scenarios)
+        self.scenarios = self.scenario_q = None      # --sim-clock: the twin's scenarios on the real services
         self.next_train = next_3am(self.clock())
 
     @property
@@ -308,6 +311,8 @@ class Automation(house_state.Listener):
             self.listen(client)
 
     def listen(self, client):
+        if self.sim:                                            # test channel: run the twin's scenarios here
+            self.start_scenarios(client)
         client.subscribe("home/#", qos=1)
         say("listening to home/# on", f"{self.args.host}:{self.args.port}"
             + (f" · shared clock x{self.sim.speed:g}" if self.sim else ""))
@@ -319,6 +324,46 @@ class Automation(house_state.Listener):
                 self.house.handle(topic, payload)
         except (ValueError, TypeError, AttributeError) as e:
             say("!! bad message", topic, payload, f"({e})")
+
+    # ------------------------------------------------------------------ the twin's scenarios (--sim-clock only)
+    def start_scenarios(self, client):
+        """hub/test/scenario {"id": "forgot_light"} runs pi/scenarios.py — the digital twin's own scenarios —
+        on these real services through pi/scenario_bridge.py; the result goes to hub/test/scenario/result."""
+        import queue
+        from scenario_bridge import BridgeHouse, ClockProxy
+        from scenarios import ScenarioRunner
+        if self.scenarios is None:
+            bridge = BridgeHouse(self)
+            self.scenarios, self.scenario_q, self.scenario_seen = ScenarioRunner(bridge, ClockProxy(bridge)),                 queue.Queue(), 0
+        self.scenarios.h.attach(client)
+        client.message_callback_add("hub/test/scenario", lambda c, u, m: self.scenario_q.put(m.payload))
+        client.subscribe("hub/test/scenario", qos=1)
+
+    def scenario_tick(self):
+        """From the main loop (the AI is only touched from here): start a requested scenario, check the one
+        that runs, publish a finished result."""
+        if self.scenarios is None:
+            return
+        import json as _json
+        import queue
+        r = self.scenarios
+        try:
+            req = _json.loads(self.scenario_q.get_nowait())
+            if self.ai_on():
+                say(f"scenario {req.get('id')}: start")
+                r.start(req.get("id"))
+            else:
+                r.finish_now(req.get("id"), req.get("id"), False, "the AI is not ready yet")
+        except queue.Empty:
+            pass
+        except ValueError:
+            pass
+        r.tick()
+        while self.scenario_seen < len(r.results):
+            res = r.results[self.scenario_seen]
+            self.scenario_seen += 1
+            say(f"scenario {res['id']}: {'PASS' if res['ok'] else 'FAIL'} — {res['detail']}")
+            self.client.publish("hub/test/scenario/result", _json.dumps(res), qos=1)
 
     # ------------------------------------------------------------------ what changed (house_state.Listener)
     def occ_changed(self, rid, occ):
@@ -335,6 +380,11 @@ class Automation(house_state.Listener):
 
     def device_changed(self, dev, before, src, changed):
         st = self.house.devices[dev]
+        if changed and before.get("v") != st.get("v"):
+            who = {"ai": "ai", "rule": "rule", "button": "manual", "web": "manual"}.get(src)
+            if who:
+                key = f"{who}_{'on' if st.get('v') else 'off'}"
+                self.counts[key] = self.counts.get(key, 0) + 1
         if changed and src in ("button", "web"):
             now = self.clock()
             self.manual_at[dev] = now
@@ -392,7 +442,7 @@ class Automation(house_state.Listener):
                     continue
                 for dev, cfg in (room.get("devices") or {}).items():
                     caps, ctrl, r = cfg.get("caps") or {}, cfg.get("control") or {}, cfg.get("rules") or {}
-                    if caps.get("power") != "write" or not ctrl.get("rules") or self.ex.busy(dev):
+                    if caps.get("power") != "write" or not ctrl.get("rules") or self.ex.busy(dev)                             or dev in self.rules_off:
                         continue
                     st = h.devices[dev]
                     empty_min = float(th.get("empty_room_off_min", 10))
@@ -561,6 +611,7 @@ def main():
             if auto.ai_on() and house_now - last["plan"] >= PLAN_S:
                 auto.ai_plan()
                 last["plan"] = house_now
+            auto.scenario_tick()
             if args.ask and not asked and auto.ai_on() and now - started > 75:   # after the first heartbeats
                 asked = True
                 say(f"test question about {args.ask}:", auto.ask_now(args.ask) or "the AI did not ask (sensors)")
