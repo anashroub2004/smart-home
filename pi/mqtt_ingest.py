@@ -2,7 +2,8 @@
 MQTT ingest — the Pi's "ears" (stage 1b). The first real Pi service.
 
 Listens to everything the ESP32 nodes say (home/#, topics in docs/contract.md), keeps a picture of the
-house in memory, and writes it to the two places that need it:
+house in memory (house_state.py, the same code automation.py uses), and writes it to the two places that
+need it:
     SQLite  (ai/data/home.db)     every raw reading, on change + heartbeat — the AI learns from it; it never
                                   leaves the house (ai.store.Recorder, keys from contract.md "SQLite")
     Firebase                      /home_state rooms + devices + power, /nodes, and /events for what only the
@@ -36,17 +37,15 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
 
 import firebase_writer  # noqa: E402
+import house_state  # noqa: E402
 import house_words  # noqa: E402
-from firebase_writer import Writer, now_ms  # noqa: E402
+from firebase_writer import Writer  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
 FLUSH_S = 2.0             # Firebase gets the changes at most every 2 s (20 MQTT messages/s would waste quota)
 HOLD_CHECK_S = 5.0        # how often PIR-only rooms are checked for "no motion for pir_hold_s"
 SNAPSHOT_S = 60.0         # every minute all values go to the Recorder too (it writes its 15-min heartbeat)
-PIR_HOLD_S = 300          # default for thresholds.pir_hold_s
-SENSORS = ("temp", "hum", "lux")
-PRESENCE = ("mmwave", "pir")
 
 PRINT_LOCK = threading.Lock()
 
@@ -56,39 +55,28 @@ def say(*parts):
         print(time.strftime("%H:%M:%S"), *parts, flush=True)
 
 
-def number(payload):
-    try:
-        return float(payload)
-    except ValueError:
-        return None
+class Ingest(house_state.Listener):
+    """Builds the picture of the house (house_state.HouseState) and records / shows what changes."""
 
-
-class Ingest:
     def __init__(self, writer, con, config, args):
         self.w, self.args = writer, args
         self.recorder = store.Recorder(con)
         self.lock = threading.Lock()
         self.client = None
-        self.rooms, self.devices, self.nodes = {}, {}, {}       # the picture of the house
         self.dirty = set()                                      # Firebase paths to write at the next flush
-        self.load_config(config)
+        self.house = house_state.HouseState(config, self)
 
-    # ------------------------------------------------------------------ /config: what exists, which node
+    @property
+    def config(self):
+        return self.house.config
+
+    @property
+    def th(self):
+        return self.house.th
+
     def load_config(self, config):
         with self.lock:
-            self.config = config
-            self.th = config.get("thresholds") or {}
-            self.dev_room = {d: rid for rid, rc in config["rooms"].items() for d in (rc.get("devices") or {})}
-            for rid, rc in config["rooms"].items():
-                if rc.get("sensors"):
-                    self.rooms.setdefault(rid, {"occ": 0})
-            for dev in self.dev_room:
-                self.devices.setdefault(dev, {"v": 0})
-            for node in config.get("nodes") or {}:
-                self.nodes.setdefault(node, {"online": False, "version": None})
-
-    def dev_cfg(self, dev):
-        return self.config["rooms"][self.dev_room[dev]]["devices"][dev]
+            self.house.load_config(config)
 
     def label(self, dev):
         return house_words.label(self.config, dev)
@@ -99,7 +87,7 @@ class Ingest:
         return {"version": self.config.get("version"), "rooms": rooms}
 
     def send_configs(self):
-        for node in self.nodes:
+        for node in self.house.nodes:
             body = json.dumps(self.node_config(node))
             self.client.publish(f"home/{node}/config", body, qos=1, retain=True)
             say(f"-> home/{node}/config", f"v{self.config.get('version')}")
@@ -125,34 +113,27 @@ class Ingest:
         topic, payload = msg.topic, msg.payload.decode("utf-8", "replace")
         if self.args.verbose:
             say("<-", topic, payload)
-        p = topic.split("/")
         try:
             with self.lock:
-                if len(p) == 3 and p[1] in self.nodes and p[2] == "status":
-                    self.on_status(p[1], payload)
-                elif len(p) == 4 and p[1] in self.nodes and p[2:] == ["config", "ack"]:
-                    self.on_ack(p[1], json.loads(payload))
-                elif len(p) == 3 and p[1] == "door" and p[2] == "event":
-                    self.on_door(json.loads(payload))
-                elif len(p) == 3 and p[1] in self.rooms and p[2] in SENSORS:
-                    self.on_sensor(p[1], p[2], number(payload))
-                elif len(p) == 3 and p[1] in self.rooms and p[2] in PRESENCE:
-                    self.on_presence(p[1], p[2], number(payload))
-                elif len(p) == 4 and p[2] in self.devices and p[3] == "state":
-                    self.on_state(p[2], json.loads(payload))
-                elif len(p) == 4 and p[2] in self.devices and p[3] == "power":
-                    self.on_power(p[2], json.loads(payload))
-                # everything else (config we sent, /set and door/open from other services) is not ours
+                self.house.handle(topic, payload)
         except (ValueError, TypeError, AttributeError) as e:
             say("!! bad message", topic, payload, f"({e})")
 
-    # ------------------------------------------------------------------ what each message means
-    def on_status(self, node, payload):
-        online = payload.strip() == "online"
-        n = self.nodes[node]
-        if n["online"] == online:
-            return
-        n["online"] = online
+    # ------------------------------------------------------------------ what changed (house_state.Listener)
+    def reading(self, key, value):
+        self.recorder.observe({key: value})
+
+    def room_changed(self, rid):
+        self.dirty.add(f"rooms/{rid}")
+
+    def power_changed(self, dev):
+        self.dirty.update((f"devices/{dev}", "power_w"))
+
+    def config_ack(self, node, version):
+        self.dirty.add(f"nodes/{node}")
+        say(f"node {node}", f"runs config v{version}")
+
+    def node_status(self, node, online):
         self.dirty.add(f"nodes/{node}")
         name = (self.config.get("nodes") or {}).get(node, {}).get("name", node)
         say(f"node {node}", "online" if online else "OFFLINE")
@@ -161,128 +142,43 @@ class Ingest:
                          short="Connected to the hub" if online else "No contact (power or Wi-Fi)",
                          tags=["system", "node"])
 
-    def on_ack(self, node, body):
-        self.nodes[node]["version"] = body.get("version")
-        self.dirty.add(f"nodes/{node}")
-        say(f"node {node}", f"runs config v{body.get('version')}")
-
-    def on_door(self, ev):
+    def door_event(self, ev):
         """A person came in (fingerprint / PIN): the AI's door/entry. Access log + alerts are security.py."""
         if ev.get("ok") and ev.get("type") in ("fingerprint", "keypad"):
             self.recorder.event("door/entry")
             say("door", f"entry ({ev.get('type')})")
 
-    def on_sensor(self, rid, kind, value):
-        if value is None:
-            return
-        value = round(value, 1) if kind == "temp" else round(value)
-        room = self.rooms[rid]
-        if room.get(kind) != value:
-            room[kind] = value
-            self.dirty.add(f"rooms/{rid}")
-        self.recorder.observe({f"{rid}/{kind}": value})
-
-    def on_presence(self, rid, kind, value):
-        if value is None:
-            return
-        room, v = self.rooms[rid], int(value >= 0.5)
-        if kind == "pir" and v:
-            room["_motion"] = time.time()
-        if room.get(kind) != v:
-            room[kind] = v
-            self.dirty.add(f"rooms/{rid}")
-        self.recorder.observe({f"{rid}/{kind}": v})
-        self.update_occ(rid)
-
-    def update_occ(self, rid):
-        """Is someone in the room? Radar room: the radar (it sees you sitting still) or the PIR.
-        PIR-only room (kitchen, bathroom): motion in the last pir_hold_s seconds."""
-        room, rc = self.rooms[rid], self.config["rooms"][rid]
-        if "occ" not in (rc.get("sensors") or []):
-            return
-        if room.get("mmwave") is not None:
-            occ, by = int(bool(room.get("mmwave") or room.get("pir"))), "mmwave" if room.get("mmwave") else "pir"
-        else:
-            hold = float(self.th.get("pir_hold_s", PIR_HOLD_S))
-            occ, by = int(time.time() - room.get("_motion", 0) < hold), "pir"
-        if occ != room.get("occ"):
-            room["occ"], room["occ_since"] = occ, now_ms()
-            if occ:
-                room["occ_by"] = by
-            self.dirty.add(f"rooms/{rid}")
-            self.recorder.observe({f"{rid}/occ": occ})
-
-    def on_state(self, dev, body):
-        st = self.devices[dev]
-        before = {k: st.get(k) for k in ("v", "level", "mode")}
-        st["v"] = int(bool(body.get("v")))
-        for k in ("level", "mode"):
-            if body.get(k) is not None:
-                st[k] = body[k]
-        src = body.get("src")
-        if src:
-            st["src"] = src
-        changed = before != {k: st.get(k) for k in ("v", "level", "mode")}
-        if changed:
-            st["at"] = now_ms()
+    def device_changed(self, dev, before, src, changed):
         self.dirty.add(f"devices/{dev}")
-        vals = {f"device/{dev}": st["v"]}
-        if st.get("level") is not None:
-            vals[f"level/{dev}"] = st["level"]
-        self.recorder.observe(vals)
         if src == "button" and changed:
             # only the node knows about a wall button: the AI must hear it (manual control = hands off),
             # and the History must show it. Changes from the app / AI / rules are logged by the service
             # that asked for them (commands.py, automation.py) — not twice.
+            st = self.house.devices[dev]
             self.recorder.event(f"override/{dev}")
-            room = self.config["rooms"][self.dev_room[dev]]
+            rid = self.house.dev_room[dev]
+            room = self.config["rooms"][rid]
             what = "turned on" if st["v"] else "turned off"
             self.w.log_event("device", "manual", f"{self.label(dev)} {what}", "button", "Button", device=dev,
-                             room=self.dev_room[dev], node=room.get("node"), by_label="Someone at home (button)",
+                             room=rid, node=room.get("node"), by_label="Someone at home (button)",
                              short=f"Wall button in the {room['name'].lower()}", tags=["manual"],
                              from_={k: v for k, v in before.items() if v is not None},
                              to={k: st.get(k) for k in ("v", "level", "mode") if st.get(k) is not None})
             say(f"button {dev}", what)
 
-    def on_power(self, dev, body):
-        w = body.get("w")
-        if w is None:
-            return
-        st, cfg = self.devices[dev], self.dev_cfg(dev)
-        st["watts"] = round(float(w), 2)
-        self.dirty.add(f"devices/{dev}")
-        self.dirty.add("power_w")
-        caps = cfg.get("caps") or {}
-        if (caps.get("energy") or "none") != "none" or caps.get("power") == "read":
-            self.recorder.observe({f"power/{dev}": st["watts"]})
-        if caps.get("power") == "read":
-            # monitor-only device (fridge, kettle): on/off comes from the current it draws
-            on = int(st["watts"] > float((cfg.get("hw") or {}).get("on_above_w", 0.5)))
-            if on != st.get("v"):
-                st.update(v=on, src="system", at=now_ms())
-                self.recorder.observe({f"device/{dev}": on})
-
     # ------------------------------------------------------------------ periodic work
     def check_holds(self):
         with self.lock:
-            for rid, room in self.rooms.items():
-                if room.get("mmwave") is None and "_motion" in room:
-                    self.update_occ(rid)
+            self.house.check_holds()
 
     def snapshot(self):
         """All current values once a minute: the Recorder decides what is new (its 15-min heartbeat)."""
         with self.lock:
-            vals = {}
-            for rid, room in self.rooms.items():
-                for k in SENSORS + PRESENCE + ("occ",):
-                    if room.get(k) is not None:
-                        vals[f"{rid}/{k}"] = room[k]
-            for dev, st in self.devices.items():
-                vals[f"device/{dev}"] = st.get("v", 0)
-            self.recorder.observe(vals)
+            self.recorder.observe(self.house.values())
 
     def flush(self):
         """Send what changed to Firebase in one patch (rooms + devices + total power + nodes)."""
+        h = self.house
         with self.lock:
             dirty, self.dirty = self.dirty, set()
             if not dirty:
@@ -290,13 +186,12 @@ class Ingest:
             parts = {}
             for path in dirty:
                 if path.startswith("rooms/"):
-                    rid = path.split("/", 1)[1]
-                    parts[path] = {k: v for k, v in self.rooms[rid].items() if not k.startswith("_")}
+                    parts[path] = h.public_room(path.split("/", 1)[1])
                 elif path.startswith("devices/"):
-                    parts[path] = dict(self.devices[path.split("/", 1)[1]])
+                    parts[path] = dict(h.devices[path.split("/", 1)[1]])
             if "power_w" in dirty or any(p.startswith("devices/") for p in dirty):
-                parts["power_w"] = round(sum(st.get("watts") or 0 for st in self.devices.values()), 2)
-            nodes = {p.split("/", 1)[1]: dict(self.nodes[p.split("/", 1)[1]]) for p in dirty if p.startswith("nodes/")}
+                parts["power_w"] = round(sum(st.get("watts") or 0 for st in h.devices.values()), 2)
+            nodes = {p.split("/", 1)[1]: dict(h.nodes[p.split("/", 1)[1]]) for p in dirty if p.startswith("nodes/")}
         if parts:
             self.w.patch_home_state(parts)
         for node, n in nodes.items():
@@ -363,7 +258,7 @@ def main():
     con = store.connect(args.db)
     ing = Ingest(w, con, config, args)
     say(f"Firebase: {where} · SQLite: {args.db} · config v{config.get('version')} · "
-        f"PIR hold {ing.th.get('pir_hold_s', PIR_HOLD_S)} s")
+        f"PIR hold {ing.th.get('pir_hold_s', house_state.PIR_HOLD_S)} s")
     try:
         ing.connect()
     except OSError as e:

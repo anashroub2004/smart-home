@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 
 import house_words  # noqa: E402
 from firebase_writer import Writer, now_ms  # noqa: E402
+from mqtt_exec import MqttExecutor  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
@@ -64,7 +65,7 @@ class Commands:
         self.client = None
         self.online = {}        # node -> True / False (from home/<node>/status, retained)
         self.seen = {}          # device -> key of the last command taken, so a command runs once
-        self.waiting = {}       # device -> the command in flight, waiting for the node's answer
+        self.ex = None          # MqttExecutor: sends the /set and waits for the node's answer
         self.last_state = {}    # device -> the last state its node reported
         self.scene = None
         self.load_config(config)
@@ -85,6 +86,7 @@ class Commands:
         c.connect(self.args.host, self.args.port, keepalive=30)
         c.loop_start()
         self.client = c
+        self.ex = MqttExecutor(c, NODE_TIMEOUT_S)
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
@@ -107,22 +109,7 @@ class Commands:
                 return
             with self.lock:
                 self.last_state[p[2]] = st                # "before" for the next command's History line
-                job = self.waiting.get(p[2])
-                if job and self.answers(job, st):
-                    self.waiting.pop(p[2])
-                else:
-                    job = None
-            if job:
-                self.finish(p[2], job, ok=True, state=st)
-
-    @staticmethod
-    def answers(job, st):
-        """Is this state the node's answer to our /set? Same v (and level / mode when we asked for them).
-        A wall button pressed meanwhile gives another state — not an answer."""
-        want = job["want"]
-        if int(bool(st.get("v"))) != want["v"]:
-            return False
-        return all(st.get(k) == want[k] for k in ("level", "mode") if want.get(k) is not None)
+            self.ex.answer(p[2], st)
 
     # ------------------------------------------------------------------ /commands
     def poll(self):
@@ -169,23 +156,14 @@ class Commands:
             return
         self.take_scene(cmd.get("scene"))
         node, meta = self.node_of(dev), self.meta(cmd)
-        job = {"cmd": cmd, "meta": meta, "lock": lock, "sent": time.time(), "node": node,
-               "before": dict(self.last_state.get(dev) or {"v": 0}),
-               "want": {"v": 1} if lock else {"v": int(bool(cmd.get("v"))), "level": cmd.get("level"),
-                                                 "mode": cmd.get("mode")}}
+        job = {"cmd": cmd, "meta": meta, "lock": lock, "node": node,
+               "before": dict(self.last_state.get(dev) or {"v": 0})}
         if not self.online.get(node):
             self.fail(dev, job, f"No response from the {node} node (offline)")
             return
-        with self.lock:
-            self.waiting[dev] = job
-        if lock:
-            self.client.publish("home/door/open", json.dumps({"src": meta["source"]}), qos=1)
-            say(f"{dev}: -> home/door/open")
-        else:
-            body = {k: cmd[k] for k in ("v", "level", "mode") if cmd.get(k) is not None}
-            body["src"] = meta["source"]
-            self.client.publish(f"home/{rid}/{dev}/set", json.dumps(body), qos=1)
-            say(f"{dev}: -> home/{rid}/{dev}/set {json.dumps(body)}")
+        self.ex.send(dev, rid, cmd, meta["source"], node=node, lock=lock,
+                     done=lambda d, st, _ms: self.finish(d, job, st), failed=lambda d, why: self.fail(d, job, why))
+        say(f"{dev}: -> " + ("home/door/open" if lock else f"home/{rid}/{dev}/set"))
 
     def take_scene(self, scene):
         """A scene button sends one command per device; the house is now in that scene (Away = nobody home)."""
@@ -195,17 +173,8 @@ class Commands:
         self.w.patch_home_state({"scene": scene})
         store.write(self.con, [(int(time.time()), "mode/away", 1.0 if scene == "away" else 0.0)])
 
-    def check_timeouts(self):
-        now = time.time()
-        with self.lock:
-            late = [(d, j) for d, j in self.waiting.items() if now - j["sent"] > NODE_TIMEOUT_S]
-            for d, _ in late:
-                self.waiting.pop(d)
-        for dev, job in late:
-            self.fail(dev, job, f"No response from the {job['node']} node ({NODE_TIMEOUT_S:.0f} s)")
-
     # ------------------------------------------------------------------ the end of a command
-    def finish(self, dev, job, ok, state):
+    def finish(self, dev, job, state):
         cmd, meta = job["cmd"], job["meta"]
         latency = max(0, now_ms() - int(cmd.get("at") or now_ms()))
         self.w.ack_command(dev, True)
@@ -301,7 +270,7 @@ def main():
     try:
         while True:
             cmds.poll()
-            cmds.check_timeouts()
+            cmds.ex.check_timeouts()
             if time.time() - last_cfg >= CONFIG_EVERY_S:
                 cmds.check_config()
                 last_cfg = time.time()

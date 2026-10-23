@@ -8,6 +8,9 @@
 | `fake_nodes.py` | 3 عقد ESP32 وهمية على MQTT (`living`، `bedroom`، `door`) تتكلم رسائل `docs/contract.md` بالضبط. الغرف والحساسات والأجهزة من `/config`. تُستبدل بالعقد الحقيقية واحدة واحدة |
 | `mqtt_ingest.py` | **خدمة Pi** (1b): MQTT ← SQLite (للـ AI) + `/home_state` + `/nodes` + `/events` (زر الجدار، عقدة offline)، ويرسل لكل عقدة جزأها من `/config` |
 | `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
+| `automation.py` | **خدمة Pi** (1d): العقل. القواعد الآن (1d-1)، والـ AI قريباً (1d-2). يرى البيت بنفسه عبر MQTT، وينفّذ بـ `src: rule`، ويحترم التحكم اليدوي (ساعتان) و`/ai_pause` |
+| `house_state.py` | "صورة البيت" من رسائل العقد (من في الغرفة، حرارة، أجهزة) — نفس الكود لـ `mqtt_ingest` و`automation` |
+| `mqtt_exec.py` | `MqttExecutor`: "أرسل `set` وانتظر رد العقدة 5 ثوانٍ" — لـ `commands` و`automation` |
 | `house_words.py` | كلمات History المشتركة بين الخدمات ("Living room fan"، "On · Medium") |
 
 ## المرحلة 1: العقد الوهمية + خدمات الـ Pi على الحاسوب
@@ -21,7 +24,9 @@ python pi/fake_nodes.py
 python pi/mqtt_ingest.py
 # نافذة 4: اليد
 python pi/commands.py
-# نافذة 5: التطبيق ← http://localhost:3000  (owner@home.test / password123)
+# نافذة 5: العقل (القواعد) — إيقافه لا يوقف البيت
+python pi/automation.py
+# نافذة 6: التطبيق ← http://localhost:3000  (owner@home.test / password123)
 cd web; npm run dev
 ```
 
