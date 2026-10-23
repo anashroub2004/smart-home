@@ -481,7 +481,8 @@
       "ai_suggest_at": 0.6,
       "override_pause_min": 120,
       "door_lockout_attempts": 5,
-      "door_lockout_s": 60
+      "door_lockout_s": 60,
+      "pir_hold_s": 300
     },
     "fingerprints": {
       "1": "Owner",

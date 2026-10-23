@@ -7,5 +7,5 @@
 google-auth>=2.30
 requests>=2.31
 #
-# On the real Raspberry Pi the services will additionally need:
-# paho-mqtt>=2.0
+# MQTT: the fake ESP32 nodes (fake_nodes.py) and the Pi services (broker: Mosquitto)
+paho-mqtt>=2.0,<3
