@@ -20,8 +20,9 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
     rooms = config["rooms"]
     devs = {d: (rid, c) for rid, r in rooms.items() for d, c in (r.get("devices") or {}).items()
             if not (c.get("caps") or {}).get("lock")}
-    end = pd.Timestamp(end_ts or pd.Timestamp.now().timestamp(), unit="s", tz="UTC").tz_convert(S.TZ)
-    end = end.floor("5min")
+    # floored in UTC: in local time the hour when summer time ends (01:00-02:00 on a late-October night in
+    # Asia/Hebron) happens twice and pandas cannot tell which one is meant (whole-hour offset: same result)
+    end = pd.Timestamp(end_ts or pd.Timestamp.now().timestamp(), unit="s", tz="UTC").floor("5min").tz_convert(S.TZ)
     start = end - pd.Timedelta(days=days)
     trip = None
     if vacation and days >= 35:
