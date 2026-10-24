@@ -11,7 +11,7 @@ writes down what happened and tells the owner (docs/contract.md "Door security")
     node:  home/entrance/door_lock/state {"v": 1, "src": "web"}          -> last_open (the app's unlock;
                                                                             commands.py logs that one)
 
-The internet may be down: every write goes to SQLite first (table "access" = the outbox) and is sent to
+The internet may be down: every write goes to SQLite first (pi/outbox.py, table "access") and is sent to
 Firebase when it can be, with the time it happened. MQTT stays inside the house, so nothing here needs the
 internet. A persistent MQTT session: the broker keeps the door's messages while this service restarts.
 
@@ -40,10 +40,10 @@ sys.path.insert(0, str(ROOT))
 
 import house_words  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
+from outbox import Outbox, read_config  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
-SEED = ROOT / "docs" / "seed.json"
 FLUSH_S = 1.0             # the outbox is sent every second ...
 RETRY_S = 10.0            # ... or every 10 s while Firebase cannot be reached
 CONFIG_EVERY_S = 30.0     # /config is re-read (thresholds, fingerprint names)
@@ -58,60 +58,6 @@ def say(*parts):
 
 def duration(secs):
     return f"{secs} s" if secs < 120 else f"{round(secs / 60)} min"
-
-
-# ------------------------------------------------------------------ SQLite first, Firebase when it can
-class Outbox:
-    """Writer calls kept in SQLite until Firebase took them. Same method names as Writer."""
-
-    def __init__(self, con, writer, clock=time.time):
-        self.con, self.w, self.clock = con, writer, clock
-        self.lock = threading.Lock()
-        self.down = False                     # Firebase could not be reached the last time
-        con.execute("CREATE TABLE IF NOT EXISTS access (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER, "
-                    "kind TEXT, data TEXT, sent INTEGER DEFAULT 0)")
-        con.commit()
-
-    def add(self, kind, *args, **kw):
-        with self.lock:
-            self.con.execute("INSERT INTO access (at, kind, data) VALUES (?,?,?)",
-                             (int(self.clock() * 1000), kind, json.dumps({"a": args, "k": kw})))
-            self.con.commit()
-
-    def log_access(self, *a, **k):
-        self.add("log_access", *a, **k)
-
-    def log_event(self, *a, **k):
-        self.add("log_event", *a, **k)
-
-    def push_alert(self, *a, **k):
-        self.add("push_alert", *a, **k)
-
-    def pending(self):
-        return self.con.execute("SELECT COUNT(*) FROM access WHERE sent = 0").fetchone()[0]
-
-    def flush(self):
-        """Send what is waiting, oldest first. Stops at the first failure (the internet is down) and keeps the rest."""
-        with self.lock:
-            rows = self.con.execute("SELECT id, at, kind, data FROM access WHERE sent = 0 ORDER BY id").fetchall()
-        sent = 0
-        for rid, at, kind, data in rows:
-            d = json.loads(data)
-            try:
-                getattr(self.w, kind)(*d["a"], at=at, **d["k"])
-            except Exception as e:  # noqa: BLE001 — no internet / Firebase down: try again later
-                if not self.down:
-                    say(f"!! Firebase not reachable ({type(e).__name__}): {len(rows) - sent} kept in SQLite")
-                self.down = True
-                return False
-            with self.lock:
-                self.con.execute("UPDATE access SET sent = 1 WHERE id = ?", (rid,))
-                self.con.commit()
-            sent += 1
-        if self.down and sent:
-            say(f"Firebase back: sent {sent} kept while it was down")
-        self.down = False
-        return True
 
 
 # ------------------------------------------------------------------ what the door's messages mean
@@ -228,7 +174,7 @@ class Service:
         self.w, self.con, self.args = writer, con, args
         self.sim = clock                                        # hub_clock.SharedClock with --sim-clock
         self.clock = clock.now if clock else time.time
-        self.out = Outbox(con, writer, self.clock)
+        self.out = Outbox(con, writer, self.clock, table="access")
         self.sec = Security(self.out, config, self.clock)
         self.client = None
 
@@ -281,26 +227,6 @@ class Service:
             say(f"/config changed: v{self.sec.config.get('version')} -> v{cfg.get('version')}")
             with self.sec.lock:
                 self.sec.load_config(cfg)
-
-
-def read_config(w, con, quiet=False):
-    """/config from Firebase, kept in SQLite for a start without the internet (else docs/seed.json)."""
-    try:
-        cfg = w.get_config()
-        if cfg:
-            con.execute("INSERT OR REPLACE INTO meta VALUES ('security_config', ?)", (json.dumps(cfg),))
-            con.commit()
-            return cfg
-    except Exception as e:  # noqa: BLE001
-        if not quiet:
-            say(f"!! cannot read /config ({type(e).__name__}): using the last one kept in SQLite")
-    if quiet:
-        return None
-    row = con.execute("SELECT value FROM meta WHERE key = 'security_config'").fetchone()
-    if row:
-        return json.loads(row[0])
-    say("!! no /config kept yet: using docs/seed.json")
-    return json.loads(SEED.read_text(encoding="utf-8"))["config"]
 
 
 def open_firebase(args):

@@ -275,3 +275,6 @@
 
 جدول `access(id, at, kind, data, sent)` تكتبه `pi/security.py`: كل كتابة لـ Firebase سببها الباب (`kind` = `log_access` · `log_event` · `push_alert`، و`data` = قيمها JSON).
 `sent = 0` = في صندوق الانتظار (الإنترنت مقطوع)، يُرسل عند رجوعه بوقته الأصلي `at`.
+
+جدول `outbox` بنفس الشكل تكتبه `pi/mqtt_ingest.py` (2026-10-24): أسطر History من زر الجدار وانقطاع العقد، وملخصات كل دقيقة (`write_summary`).
+الصفوف المُرسلة تُحذف بعد 7 أيام (`pi/outbox.py`). و`meta.kept_config` = آخر `/config` رآه الـ Pi، لبدء الخدمات بلا إنترنت.
