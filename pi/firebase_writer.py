@@ -67,15 +67,16 @@ class Writer:
         self.db.patch(f"commands/{device}", data)
 
     # ------------------------------------------------------------ events log (Pi only)
-    def log_event(self, kind, group, title, source, src_label, result="ok", **fields):
+    def log_event(self, kind, group, title, source, src_label, result="ok", at=None, **fields):
         """
         kind   : device | door | motion | node | ai | rule | scene | alert | config
         group  : manual | ai | rule | door | system   (the History filter + colour)
         title  : "Living room fan turned on"
         fields : short, why, by, by_label, change, device, room, node, confidence,
                  from_, to, latency_ms, saved_wh, tags
+        at     : when it happened (ms) — security.py sends events kept while the internet was down
         """
-        ev = {"at": now_ms(), "kind": kind, "group": group, "title": title,
+        ev = {"at": at or now_ms(), "kind": kind, "group": group, "title": title,
               "source": source, "src_label": src_label, "result": result}
         if "from_" in fields:
             fields["from"] = fields.pop("from_")
@@ -130,15 +131,15 @@ class Writer:
             self.db.patch(f"energy_waste/{day}", per_device)
 
     # ------------------------------------------------------------ security
-    def log_access(self, method, ok, who=None):
-        entry = {"at": now_ms(), "method": method, "ok": ok}
+    def log_access(self, method, ok, who=None, at=None):
+        entry = {"at": at or now_ms(), "method": method, "ok": ok}
         if who:
             entry["who"] = who
         self.db.post("access_log", entry)
 
-    def push_alert(self, level, title, where, go, lines=None):
+    def push_alert(self, level, title, where, go, lines=None, at=None):
         """level: critical | warning | info | good. go: the web screen to open (security, energy, settings)."""
-        alert = {"at": now_ms(), "level": level, "title": title, "where": where, "go": go}
+        alert = {"at": at or now_ms(), "level": level, "title": title, "where": where, "go": go}
         if lines:
             alert["lines"] = lines
         return self.db.post("alerts", alert)

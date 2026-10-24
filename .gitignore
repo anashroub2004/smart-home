@@ -37,3 +37,4 @@ pi/twin/reports/
 *.db-wal
 *.db-shm
 *.patch
+pi/.flash/

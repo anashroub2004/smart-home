@@ -39,3 +39,17 @@ def state_label(cfg, st):
     if caps.get("mode") and st.get("mode"):
         return f"On · {st['mode']}"
     return "On"
+
+
+def door_open_words(method, who=None, finger=None):
+    """The History line of a door opening (security.py and the simulator): fields for log_event."""
+    titles = {"web": "Front door unlocked remotely", "exit_button": "Front door opened from inside"}
+    labels = {"web": "App", "fingerprint": "Fingerprint", "keypad": "Keypad", "exit_button": "Exit button"}
+    shorts = {"web": "Owner · web app", "fingerprint": f"{who} · finger #{finger}",
+              "keypad": "Correct PIN", "exit_button": "Opened from inside"}
+    whys = {"web": "Remote unlock, confirmed in the app", "fingerprint": "Fingerprint matched on the R503 sensor",
+            "keypad": "Correct PIN on the keypad", "exit_button": "Exit button next to the door"}
+    by_labels = {"web": "Owner (web app)", "fingerprint": f"{who} (fingerprint #{finger})",
+                 "keypad": "Someone with the PIN", "exit_button": "Someone at home"}
+    return dict(title=titles.get(method, "Front door unlocked"), src_label=labels[method], short=shorts[method],
+                why=whys[method], by_label=by_labels[method])
