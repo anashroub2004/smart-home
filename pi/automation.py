@@ -51,6 +51,7 @@ import house_state  # noqa: E402
 import house_words  # noqa: E402
 from firebase_writer import Writer, now_ms  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
+import mqtt_auth  # noqa: E402
 from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
 
 TICK_S = 5.0              # rules + AI tick every 5 s
@@ -302,6 +303,7 @@ class Automation(house_state.Listener):
     # ------------------------------------------------------------------ MQTT
     def connect(self):
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-automation")
+        mqtt_auth.login(c)                 # the Pi: MQTT_USER / MQTT_PASS
         c.on_connect = self.on_connect
         c.on_message = self.on_message
         self.client, self.ex = c, MqttExecutor(c, NODE_TIMEOUT_S)    # ready before the first message arrives

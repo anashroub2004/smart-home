@@ -34,6 +34,9 @@ def main():
     ids = sys.argv[1:] or ALL
     results = queue.Queue()
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-run-scenarios")
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+    import mqtt_auth
+    mqtt_auth.login(c)                                      # MQTT_USER / MQTT_PASS if the broker wants a login
     c.on_message = lambda cl, u, m: results.put(json.loads(m.payload))
     c.connect("localhost", 1883, keepalive=30)
     c.subscribe("hub/test/scenario/result", qos=1)

@@ -39,6 +39,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
 
 import house_words  # noqa: E402
+import mqtt_auth  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
 from outbox import Outbox, read_config  # noqa: E402
 from ai import store  # noqa: E402
@@ -181,6 +182,7 @@ class Service:
     def connect(self):
         # persistent session: messages for us wait in the broker while this service restarts (QoS 1)
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-security", clean_session=False)
+        mqtt_auth.login(c)                 # the Pi: MQTT_USER / MQTT_PASS
         c.on_connect = self.on_connect
         c.on_message = self.on_message
         self.client = c

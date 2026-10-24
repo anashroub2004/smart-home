@@ -44,6 +44,7 @@ sys.path.insert(0, str(ROOT))
 import firebase_writer  # noqa: E402
 import house_state  # noqa: E402
 import house_words  # noqa: E402
+import mqtt_auth  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
 from outbox import Outbox, keep_config, kept_config, read_config  # noqa: E402
 from ai import store  # noqa: E402
@@ -121,6 +122,7 @@ class Ingest(house_state.Listener):
     # ------------------------------------------------------------------ MQTT
     def connect(self):
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-mqtt-ingest")
+        mqtt_auth.login(c)                 # the Pi: MQTT_USER / MQTT_PASS
         c.on_connect = self.on_connect
         c.on_message = self.on_message
         self.client = c          # before loop_start: on_connect (another thread) publishes through self.client

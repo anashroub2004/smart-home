@@ -20,7 +20,7 @@
 | التصميم التفاعلي (13 شاشة، المرجع البصري) | https://claude.ai/artifact/RYAjYb2ku2cXVdu7219Z9Q |
 
 ## 3. العتاد (قرارات نهائية)
-- **المركز:** Raspberry Pi 8GB (MQTT broker + خدمات Python + SQLite + كاميرا + AI).
+- **المركز:** **Raspberry Pi 5** 8GB (MQTT broker + خدمات Python + SQLite + كاميرا + AI) — قرار 2026-10-24. معه: **Raspberry Pi RTC Battery** (منفذ BAT: الساعة تبقى صحيحة بعد انقطاع الكهرباء بلا إنترنت) والشاحن الرسمي **27W USB-C (5V 5A)**. التثبيت: `sudo bash pi/deploy/install.sh --key …` (systemd، `pi/README.md`).
 - **3 عقد ESP32:**
   - `living` — الصالة + المطبخ
   - `bedroom` — غرفة النوم + الحمام
