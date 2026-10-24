@@ -53,6 +53,7 @@ sys.path.insert(0, str(ROOT))
 import house_words  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
+import mqtt_auth  # noqa: E402
 from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
@@ -96,6 +97,7 @@ class Commands:
     # ------------------------------------------------------------------ MQTT
     def connect(self):
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pi-commands")
+        mqtt_auth.login(c)                 # the Pi: MQTT_USER / MQTT_PASS
         c.on_connect = self.on_connect
         c.on_message = self.on_message
         self.client, self.ex = c, MqttExecutor(c, NODE_TIMEOUT_S)    # ready before the first message arrives

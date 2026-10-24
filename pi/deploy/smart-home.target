@@ -1,0 +1,10 @@
+# Smart home — the four Pi services together. Installed by pi/deploy/install.sh.
+#   sudo systemctl restart smart-home.target     # all four
+#   systemctl list-dependencies smart-home.target
+[Unit]
+Description=Smart home: the four Pi services (ingest, commands, automation, security)
+Wants=smart-home-ingest.service smart-home-commands.service smart-home-automation.service smart-home-security.service
+After=mosquitto.service
+
+[Install]
+WantedBy=multi-user.target

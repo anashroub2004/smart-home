@@ -1,0 +1,25 @@
+# Smart home — security.py (the door's notebook: access log + alerts). Installed by pi/deploy/install.sh.
+# Local first: it does NOT wait for the network or the internet (it starts with the last /config kept in SQLite).
+[Unit]
+Description=Smart home: security.py (the door's notebook: access log + alerts)
+PartOf=smart-home.target
+After=mosquitto.service smart-home-ingest.service
+Wants=mosquitto.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=smarthome
+Group=smarthome
+WorkingDirectory=/opt/smart-home
+# MQTT_USER / MQTT_PASS (pi/deploy/mqtt_setup.py) and FIREBASE_ARGS (install.sh: --cloud <key>)
+EnvironmentFile=/etc/smart-home/mqtt.env
+EnvironmentFile=-/etc/smart-home/smart-home.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/smart-home/.venv/bin/python pi/security.py $FIREBASE_ARGS
+# a crash or an exit: back in 5 s, and never give up
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=smart-home.target

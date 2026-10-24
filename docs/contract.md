@@ -242,6 +242,18 @@
 
 العقدة تعمل بالنسخة الجديدة ثم ترد بـ `config/ack`. إن لم يصل `ack`، فالعقدة ما زالت على النسخة القديمة (أو مفصولة). المرجع العملي: `pi/fake_nodes.py`.
 
+**دخول MQTT (2026-10-24):** على الـ Pi، Mosquitto **يرفض أي اتصال بلا اسم مستخدم وكلمة سر** (`pi/deploy/mqtt_setup.py`، يُشغّله `install.sh`)، وكل مستخدم يلمس مواضيعه فقط:
+
+| المستخدم | يكتب | يقرأ |
+|---|---|---|
+| `hub` (خدمات الـ Pi الأربع) | `home/#` و`hub/#` | `home/#` و`hub/#` |
+| `<node>` (اسم العقدة في `/config/nodes`) | `home/<room>/#` لغرفه، `home/<node>/status` (والوصية LWT)، `home/<node>/config/ack` | `home/<room>/+/set` لغرفه، `home/<node>/config` |
+| عقدة الباب (فيها جهاز `lock`) — إضافة | `home/door/event` | `home/door/open` |
+
+- **لا أحد غير `hub` يستطيع نشر `home/door/open`** أو config عقدة، ولا عقدة تستطيع أن تلمس غرف عقدة أخرى. والغرفة `door` محجوزة.
+- الغرف من `/config`: **بعد إضافة غرفة جديدة في التطبيق شغّل `sudo bash pi/deploy/install.sh` مرة أخرى** (يُحدّث الصلاحيات، وكلمات السر تبقى).
+- كلمات السر: `/etc/smart-home/mqtt-users.txt` (root فقط). سطر كل عقدة يُكتب في الـ firmware، والخدمات تقرأ `MQTT_USER`/`MQTT_PASS` من `/etc/smart-home/mqtt.env`. على الحاسوب: Mosquitto المحلي بلا دخول كما كان، و`fake_nodes.py --auth FILE` لـ broker بدخول.
+
 **للاختبار فقط (لا تستعملها العقد الحقيقية ولا الـ Pi):** `hub/clock` (retained) = الساعة المسرّعة المشتركة لعالم أحمد، و`hub/clock/hold/<service>` = "أوقف الساعة" أثناء تدريب الـ AI. التفاصيل: `pi/hub_clock.py`.
 
 ## أمان الباب (2026-10-24) — الباب يحرس نفسه

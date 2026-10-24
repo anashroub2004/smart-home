@@ -17,7 +17,31 @@
 | `hub_clock.py` | **للاختبار فقط:** الساعة المسرّعة المشتركة (`hub/clock`) — العالم ينشرها، والخدمات بـ `--sim-clock` تقرؤها، والـ AI يوقفها أثناء التدريب |
 | `house_state.py` | "صورة البيت" من رسائل العقد (من في الغرفة، حرارة، أجهزة) — نفس الكود لـ `mqtt_ingest` و`automation` |
 | `mqtt_exec.py` | `MqttExecutor`: "أرسل `set` وانتظر رد العقدة 5 ثوانٍ" — لـ `commands` و`automation` |
+| `mqtt_auth.py` | دخول MQTT: الخدمات من `MQTT_USER`/`MQTT_PASS`، والعقد الوهمية من `--auth FILE`، وبلا شيء = Mosquitto المحلي بلا دخول |
+| `deploy/` | `install.sh` (تثبيت/تحديث على الـ Pi)، و`mqtt_setup.py` (قفل Mosquitto من `/config`)، و4 خدمات systemd + `smart-home.target` |
 | `house_words.py` | كلمات History المشتركة بين الخدمات ("Living room fan"، "On · Medium") |
+
+## على الـ Raspberry Pi 5 (المرحلة 2)
+
+**مرة واحدة** (Raspberry Pi OS 64-bit، وفيه المشروع، مثلاً `git clone` في `~/smart-home`):
+```bash
+cd ~/smart-home
+sudo bash pi/deploy/install.sh --key /path/to/ai-home-key.json
+```
+**المتوقع في آخره:** `ingest active` و`commands active` و`automation active` و`security active`، وسطر عن بطارية الساعة.
+السكربت: Mosquitto + Python، والمنطقة الزمنية Asia/Hebron، والمستخدم `smarthome`، ونسخ المشروع إلى `/opt/smart-home`، والمفتاح إلى `/etc/smart-home/` (مقفل)، و**قفل Mosquitto** (كلمة سر لكل عقدة وللـ Pi، وكلٌّ مواضيعه فقط)، و4 خدمات systemd.
+
+| ماذا | الأمر |
+|---|---|
+| تحديث | `git pull` ثم `sudo bash pi/deploy/install.sh` (المفتاح وكلمات السر والبيانات تبقى) |
+| الحالة | `systemctl status smart-home-ingest` (أو `-commands` / `-automation` / `-security`) |
+| السجل الحي | `journalctl -u smart-home-automation -f` |
+| إعادة تشغيل الأربع | `sudo systemctl restart smart-home.target` |
+| كلمات سر العقد (للـ firmware) | `sudo cat /etc/smart-home/mqtt-users.txt` |
+| أضفت **غرفة** في التطبيق | `sudo bash pi/deploy/install.sh` مرة أخرى (صلاحيات MQTT للغرفة الجديدة) |
+| العقد الوهمية على الـ Pi | `python pi/fake_nodes.py --auth mqtt-users.txt` (نسخة من الملف) |
+
+كل خدمة **تبدأ مع الـ Pi بلا انتظار الإنترنت**، وتعود بعد 5 ث إن توقفت (ولا تستسلم أبداً).
 
 ## المرحلة 1: العقد الوهمية + خدمات الـ Pi على الحاسوب
 

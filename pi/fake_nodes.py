@@ -14,6 +14,7 @@ Run (Mosquitto must be running — on Windows it is a service that starts by its
     python pi/fake_nodes.py --only living         # just one node (the others are real boards)
     python pi/fake_nodes.py --offline bedroom     # this node never comes online
     python pi/fake_nodes.py --broken bathroom/temp --broken living_fan/power   # a sensor that sends nothing
+    python pi/fake_nodes.py --host <pi> --auth nodes.txt     # the Pi's Mosquitto (each node logs in as itself)
 
 Watch everything the nodes say (second window):
     mosquitto_sub -h localhost -t "home/#" -v
@@ -55,6 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from door_guard import DoorGuard  # noqa: E402
+import mqtt_auth  # noqa: E402
 
 try:
     import paho.mqtt.client as mqtt
@@ -370,6 +372,8 @@ class FakeNode:
     # ------------------------------------------------ MQTT connection (one per node, like a real board)
     def connect(self):
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"fake-{self.name}")
+        if self.args.auth:                                  # a broker with logins: this node's own user
+            mqtt_auth.login(c, self.name, self.args.auth.get(self.name, ""))
         c.will_set(f"home/{self.name}/status", "offline", qos=1, retain=True)    # sent by the broker if we vanish
         c.on_connect = self.on_connect
         c.on_message = self.on_message
@@ -701,7 +705,10 @@ def main():
                     help="Ahmed (the digital twin's person, his routine file) lives in the house: pi/world.py")
     ap.add_argument("--speed", type=float, default=0,
                     help="with --world: a fast clock (e.g. 60) published on hub/clock for services run with --sim-clock")
+    ap.add_argument("--auth", metavar="FILE", help='a broker with logins: "user:password" lines, one per node '
+                                                   "(written by pi/deploy/mqtt_setup.py)")
     args = ap.parse_args()
+    args.auth = mqtt_auth.read_auth_file(args.auth) if args.auth else None
     if args.speed and not args.world:
         sys.exit("--speed needs --world (the world owns the clock)")
 
@@ -714,6 +721,8 @@ def main():
     nodes.update({n: FakeNode(n, config, world, args) for n in names})
     if args.speed:
         clock_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fake-world-clock")
+        if args.auth:
+            mqtt_auth.login(clock_client, "hub", args.auth.get("hub", ""))   # hub/clock is the hub's (test only)
         clock_client.on_connect = lambda c, *a: (world.clock.attach(c), world.attach_tests(c))
         clock_client.connect(args.host, args.port, keepalive=30)
         clock_client.loop_start()
