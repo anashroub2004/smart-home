@@ -51,6 +51,7 @@ import house_state  # noqa: E402
 import house_words  # noqa: E402
 from firebase_writer import Writer, now_ms  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
+from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
 
 TICK_S = 5.0              # rules + AI tick every 5 s
 PLAN_S = 900.0            # the AI's plan for the next hour every 15 min ("Next hour" in the app)
@@ -88,6 +89,8 @@ class SafeSink:
         def call(*a, **kw):
             try:
                 return fn(*a, **kw)
+            except Offline:                                     # known: said once already
+                return None
             except Exception as e:  # noqa: BLE001
                 say("!! Firebase (AI):", name, type(e).__name__, e)
                 return None
@@ -116,6 +119,7 @@ class Automation(house_state.Listener):
         self.counts = {}            # "ai_on", "rule_off", "manual_on", ... (who switched what, for the scenarios)
         self.scenarios = self.scenario_q = None      # --sim-clock: the twin's scenarios on the real services
         self.next_train = next_3am(self.clock())
+        self.keep_config = lambda cfg: None                     # main(): /config kept in SQLite for a start offline
 
     @property
     def config(self):
@@ -126,9 +130,12 @@ class Automation(house_state.Listener):
         return self.house.th
 
     def safe(self, fn, *a, **kw):
-        """Firebase may be unreachable (no internet): the house keeps deciding, only the log is missing."""
+        """Firebase may be unreachable (no internet): the house keeps deciding. History lines and alerts wait in
+        SQLite (LocalFirstWriter); a read gives None (the last known value is kept)."""
         try:
             return fn(*a, **kw)
+        except Offline:                                         # known: said once already
+            return None
         except Exception as e:  # noqa: BLE001
             say("!! Firebase:", type(e).__name__, e)
             return None
@@ -535,6 +542,8 @@ class Automation(house_state.Listener):
 
     def check_config(self):
         cfg = self.safe(self.w.get_config)
+        if cfg:
+            self.keep_config(cfg)
         if cfg and cfg.get("version") != self.config.get("version"):
             say(f"/config changed: v{self.config.get('version')} -> v{cfg.get('version')}")
             with self.lock:
@@ -573,13 +582,21 @@ def main():
         sim = SharedClock()
         firebase_writer.set_clock(sim.now)                     # History timestamps follow the world's time
     w, where = open_firebase(args)
+    from ai import store
+    con = store.connect(args.db)
     try:
         config = w.get_config()
-    except (RuntimeError, OSError) as e:
-        sys.exit(f"Cannot reach Firebase ({where}): {e}\nStart the emulators first:  firebase emulators:start")
-    if not config:
-        sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
-    auto = Automation(w, config, args, clock=sim)
+        if not config:
+            sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
+        keep_config(con, config)
+    except (RuntimeError, OSError) as e:                       # no internet at start: the brain still starts
+        say(f"!! cannot reach Firebase ({where}): {e} — using the last /config kept in SQLite")
+        config = kept_config(con)
+    # local first: History lines + alerts wait in SQLite, other Firebase calls never hold up the rules or the AI
+    lf = LocalFirstWriter(w, Outbox(con, w, sim.now if sim else time.time, table="automation_outbox"))
+    stop_sender, sender = lf.start_sender()
+    auto = Automation(lf, config, args, clock=sim)
+    auto.keep_config = lambda cfg: keep_config(con, cfg)
     try:
         auto.connect()
     except OSError as e:
@@ -621,6 +638,9 @@ def main():
             time.sleep(0.25 if sim else 0.5)
     except KeyboardInterrupt:
         pass
+    stop_sender.set()
+    sender.join(timeout=15)
+    lf.out.flush()
     auto.client.loop_stop()
     auto.client.disconnect()
     say("automation stopped")

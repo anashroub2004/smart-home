@@ -15,6 +15,11 @@ Decisions (Iyad, 2026-10-22):
     - /commands is read every second (POLL_S): fine for the emulator and ~3% of the free quota on the real
       Firebase; switch to streaming before the real database (stage 2)
 
+Local first: without the internet there are no commands from the app, but the service must not die. A command
+already on its way ends as usual; its done / failed and History line wait in SQLite (pi/outbox.py, table
+"commands_outbox") and reach the app when the internet is back. A start without the internet uses the last
+/config kept in SQLite and waits quietly.
+
 /home_state is NOT written here: mqtt_ingest hears the same state message and updates it.
 What this service logs in /events: the app's commands (who, how long). Wall buttons are mqtt_ingest's,
 the AI's and the rules' decisions are automation.py's.
@@ -43,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 import house_words  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
+from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
@@ -118,6 +124,8 @@ class Commands:
     def poll(self):
         try:
             cmds = self.w.get_commands()
+        except Offline:                                         # no internet: no commands from the app
+            return
         except Exception as e:  # Firebase not reachable for a moment: next second
             say("!! cannot read /commands:", e)
             return
@@ -223,9 +231,13 @@ class Commands:
     def check_config(self):
         try:
             cfg = self.w.get_config()
+        except Offline:
+            return
         except Exception as e:
             say("!! cannot read /config:", e)
             return
+        if cfg:
+            keep_config(self.con, cfg)
         if cfg and cfg.get("version") != self.config.get("version"):
             say(f"/config changed: v{self.config.get('version')} -> v{cfg.get('version')}")
             self.load_config(cfg)
@@ -256,22 +268,33 @@ def main():
         from hub_clock import SharedClock
         sim = SharedClock()
         firebase_writer.set_clock(sim.now)                     # History timestamps follow the world's time
-    w, where = open_firebase(args)
-    try:
-        config = w.get_config()
-    except (RuntimeError, OSError) as e:
-        sys.exit(f"Cannot reach Firebase ({where}): {e}\nStart the emulators first:  firebase emulators:start")
-    if not config:
-        sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
+    raw, where = open_firebase(args)
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
-    cmds = Commands(w, store.connect(args.db), config, args, clock=sim)
+    con = store.connect(args.db)
+    try:
+        config = raw.get_config()
+        if not config:
+            sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
+        keep_config(con, config)
+    except (RuntimeError, OSError) as e:                       # no internet at start: wait for it quietly
+        say(f"!! cannot reach Firebase ({where}): {e} — using the last /config kept in SQLite")
+        config = kept_config(con)
+    # History lines wait in SQLite; done / failed go straight to the app when it can, else they wait too
+    w = LocalFirstWriter(raw, Outbox(con, raw, sim.now if sim else time.time, table="commands_outbox"),
+                         fallback=("ack_command", "patch_home_state"))
+    stop_sender, sender = w.start_sender()
+    cmds = Commands(w, con, config, args, clock=sim)
     try:
         cmds.connect()
     except OSError as e:
         sys.exit(f"cannot reach the MQTT broker at {args.host}:{args.port} ({e}) — is Mosquitto running?")
     # commands still "pending" from before we started are old (the app gave up after 10 s): close them as
     # failed instead of switching something minutes later
-    for dev, cmd in (w.get_commands() or {}).items():
+    try:
+        old = raw.get_commands() or {}
+    except (RuntimeError, OSError):
+        old = {}                                               # no internet: nothing pending can reach us anyway
+    for dev, cmd in old.items():
         if isinstance(cmd, dict):
             cmds.seen[dev] = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
             if cmd.get("status") == "pending" and time.time() * 1000 - int(cmd.get("at") or 0) > 10_000:
@@ -289,6 +312,9 @@ def main():
             time.sleep(POLL_S)
     except KeyboardInterrupt:
         pass
+    stop_sender.set()
+    sender.join(timeout=15)
+    w.out.flush()
     cmds.client.loop_stop()
     cmds.client.disconnect()
     say("commands stopped")
