@@ -57,3 +57,39 @@ class RestDB:
 
     def delete(self, path):
         return self._req("DELETE", path)
+
+    def stream(self, path, idle_s=60):
+        """Listen to a path (REST streaming, server-sent events): yields (event, {"path", "data"}) as it changes.
+        First event: "put" at path "/" with the whole value; then "put" / "patch" for each change. Firebase sends
+        "keep-alive" about every 30 s, so `idle_s` without a byte means the connection died silently -> OSError.
+        Ends (StopIteration) on "auth_revoked" (the 1 h token expired: open it again for a fresh one); raises
+        RuntimeError on "cancel" (no permission). The caller reconnects."""
+        q = {"ns": self.ns} if self.ns else {}
+        url = f"{self.base}/{path.strip('/')}.json?{urllib.parse.urlencode(q)}"
+        req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+        token = self.token() if callable(self.token) else self.token
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            r = urllib.request.urlopen(req, timeout=idle_s)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"STREAM /{path} -> {e.code}: {e.read().decode(errors='ignore')}") from None
+        with r:
+            event, data = None, []
+            for raw in r:
+                self.stream_bytes = getattr(self, "stream_bytes", 0) + len(raw)
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    data.append(line[5:].strip())
+                elif not line and event:                        # a blank line ends one event
+                    body = "\n".join(data)
+                    event_, event, data = event, None, []
+                    if event_ == "keep-alive":
+                        continue
+                    if event_ == "auth_revoked":
+                        return
+                    if event_ == "cancel":
+                        raise RuntimeError(f"STREAM /{path} cancelled by Firebase: {body}")
+                    yield event_, (json.loads(body) if body and body != "null" else None)

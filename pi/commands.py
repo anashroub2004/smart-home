@@ -12,8 +12,13 @@ Decisions (Iyad, 2026-10-22):
     - the node has 5 s to answer (NODE_TIMEOUT_S); the app itself gives up after 10 s
     - no automatic retry: a failed command says so and the user sends it again (a retry could switch twice)
     - a node we know is offline (its last will) fails at once, without waiting
-    - /commands is read every second (POLL_S): fine for the emulator and ~3% of the free quota on the real
-      Firebase; switch to streaming before the real database (stage 2)
+    - /commands is a stream (2026-10-24, step d): one open connection, Firebase sends each change at once
+      (~0.1 s instead of up to 1 s), and a quiet house downloads only a keep-alive every ~30 s instead of the
+      whole /commands every second. Lost (no internet, the 1 h token, 60 s of silence): reconnect; each
+      (re)connect starts with the whole /commands
+    - a pending command in that whole picture older than 10 s (EXPIRE_S, like the app's "didn't respond") is
+      closed as failed, never run: the fan must not start half an hour after the tap because the internet
+      came back
 
 Local first: without the internet there are no commands from the app, but the service must not die. A command
 already on its way ends as usual; its done / failed and History line wait in SQLite (pi/outbox.py, table
@@ -52,7 +57,8 @@ from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
-POLL_S = 1.0              # how often /commands is read
+EXPIRE_S = 10.0           # a pending command older than this when we (re)connect is closed, not run
+RETRY_S = 5.0             # the stream is opened again this long after it was lost
 NODE_TIMEOUT_S = 5.0      # the node must answer within 5 s
 CONFIG_EVERY_S = 30.0     # /config is re-read (a device added in the app)
 
@@ -73,6 +79,7 @@ class Commands:
         self.client = None
         self.online = {}        # node -> True / False (from home/<node>/status, retained)
         self.seen = {}          # device -> key of the last command taken, so a command runs once
+        self.cmds = {}          # our copy of /commands, kept up to date by the stream
         self.ex = None          # MqttExecutor: sends the /set and waits for the node's answer
         self.last_state = {}    # device -> the last state its node reported
         self.scene = None
@@ -120,23 +127,74 @@ class Commands:
                 self.last_state[p[2]] = st                # "before" for the next command's History line
             self.ex.answer(p[2], st)
 
-    # ------------------------------------------------------------------ /commands
-    def poll(self):
-        try:
-            cmds = self.w.get_commands()
-        except Offline:                                         # no internet: no commands from the app
+    # ------------------------------------------------------------------ /commands (a stream: Firebase calls us)
+    def listen(self, stop):
+        """Keep /commands open as a stream, reopen it whenever it is lost. Runs in its own thread."""
+        db = getattr(self.w, "w", self.w).db                    # the plain Firebase client under LocalFirstWriter
+        lost_said = False
+        while not stop.is_set():
+            try:
+                for event, body in db.stream("commands"):
+                    if lost_said:
+                        say("/commands stream back")
+                        lost_said = False
+                    self.on_stream(event, body)
+                    if stop.is_set():
+                        return
+                continue                                        # auth_revoked: open it again (fresh token)
+            except Exception as e:  # noqa: BLE001 — no internet, Firebase restarted, 60 s of silence ...
+                if not lost_said:
+                    say(f"!! /commands stream lost ({type(e).__name__}): trying again every {RETRY_S:.0f} s")
+                    lost_said = True
+            stop.wait(RETRY_S)
+
+    def on_stream(self, event, body):
+        """One server-sent event: "put" / "patch" with {"path": "/living_fan/status", "data": ...}."""
+        path, data = (body or {}).get("path", "/"), (body or {}).get("data")
+        parts = [p for p in path.split("/") if p]
+        whole = not parts and event == "put"                    # (re)connected: the whole /commands
+        with self.lock:
+            if whole:
+                self.cmds = dict(data or {})
+                changed = list(self.cmds)
+            elif not parts:                                     # patch at the top: some devices
+                for dev, v in (data or {}).items():
+                    self.put_path(event, [dev], v)
+                changed = list(data or {})
+            else:
+                self.put_path(event, parts, data)
+                changed = [parts[0]]
+            todo = [(dev, self.cmds.get(dev)) for dev in changed]
+        for dev, cmd in todo:
+            self.take(dev, cmd, whole)
+
+    def put_path(self, event, parts, data):
+        node = self.cmds
+        for p in parts[:-1]:
+            if not isinstance(node.get(p), dict):
+                node[p] = {}
+            node = node[p]
+        last = parts[-1]
+        if event == "patch" and isinstance(data, dict) and isinstance(node.get(last), dict):
+            node[last].update(data)
+        elif data is None:
+            node.pop(last, None)
+        else:
+            node[last] = data
+
+    def take(self, dev, cmd, whole):
+        if not isinstance(cmd, dict) or cmd.get("status") != "pending":
             return
-        except Exception as e:  # Firebase not reachable for a moment: next second
-            say("!! cannot read /commands:", e)
+        key = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
+        if self.seen.get(dev) == key:
             return
-        for dev, cmd in cmds.items():
-            if not isinstance(cmd, dict) or cmd.get("status") != "pending":
-                continue
-            key = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
-            if self.seen.get(dev) == key:
-                continue
-            self.seen[dev] = key
-            self.start(dev, cmd)
+        self.seen[dev] = key
+        age = time.time() - int(cmd.get("at") or 0) / 1000     # the app stamps "at" with the real time
+        if whole and age > EXPIRE_S:
+            self.w.ack_command(dev, False, "Expired: the hub could not be reached in time")
+            say(f"{dev}: pending for {age:.0f} s when the stream (re)opened -> expired, not run")
+            return
+        self.start(dev, cmd)
 
     def meta(self, cmd):
         """Who asked, in the History's words (the same as the simulator)."""
@@ -288,30 +346,23 @@ def main():
         cmds.connect()
     except OSError as e:
         sys.exit(f"cannot reach the MQTT broker at {args.host}:{args.port} ({e}) — is Mosquitto running?")
-    # commands still "pending" from before we started are old (the app gave up after 10 s): close them as
-    # failed instead of switching something minutes later
-    try:
-        old = raw.get_commands() or {}
-    except (RuntimeError, OSError):
-        old = {}                                               # no internet: nothing pending can reach us anyway
-    for dev, cmd in old.items():
-        if isinstance(cmd, dict):
-            cmds.seen[dev] = (cmd.get("at"), cmd.get("v"), cmd.get("level"), cmd.get("mode"))
-            if cmd.get("status") == "pending" and time.time() * 1000 - int(cmd.get("at") or 0) > 10_000:
-                w.ack_command(dev, False, "Expired: the hub was not running")
-    say(f"Firebase: {where} · node timeout {NODE_TIMEOUT_S:.0f} s · /commands every {POLL_S:.0f} s")
+    # the stream starts with the whole /commands: what is still "pending" from before we started is old (the app
+    # gave up after 10 s) and is closed as failed instead of switching something minutes later (take())
+    stop = threading.Event()
+    threading.Thread(target=cmds.listen, args=(stop,), daemon=True).start()
+    say(f"Firebase: {where} · node timeout {NODE_TIMEOUT_S:.0f} s · /commands as a stream")
 
     last_cfg = time.time()
     try:
         while True:
-            cmds.poll()
             cmds.ex.check_timeouts()
             if time.time() - last_cfg >= CONFIG_EVERY_S:
                 cmds.check_config()
                 last_cfg = time.time()
-            time.sleep(POLL_S)
+            time.sleep(0.5)
     except KeyboardInterrupt:
         pass
+    stop.set()
     stop_sender.set()
     sender.join(timeout=15)
     w.out.flush()
