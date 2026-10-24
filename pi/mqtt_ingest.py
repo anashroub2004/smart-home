@@ -92,7 +92,13 @@ class Ingest(house_state.Listener):
     def node_config(self, node):
         """This node's part of /config (contract.md: home/<node>/config)."""
         rooms = {rid: rc for rid, rc in self.config["rooms"].items() if rc.get("node") == node}
-        return {"version": self.config.get("version"), "rooms": rooms}
+        body = {"version": self.config.get("version"), "rooms": rooms}
+        if any("lock" in (d.get("caps") or {}) for rc in rooms.values() for d in (rc.get("devices") or {}).values()):
+            th = self.config.get("thresholds") or {}         # the door node enforces the lockout itself (kept in flash)
+            body["door"] = {"lockout_attempts": int(th.get("door_lockout_attempts", 5)),
+                            "lockout_s": int(th.get("door_lockout_s", 60)),
+                            "lockout_max_s": int(th.get("door_lockout_max_s", 900))}
+        return body
 
     def send_configs(self):
         for node in self.house.nodes:

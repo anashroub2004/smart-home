@@ -29,8 +29,13 @@ What each node does (topics from docs/contract.md):
     home/<room>/<device>/power       {"w": 2.9} — what the INA226 would measure
     home/<room>/<device>/set         <- from the Pi: switch / level / mode
     home/<node>/config               <- from the Pi (retained): this node's part of /config -> config/ack
-    home/door/event                  {"type": "fingerprint" | "keypad" | "exit_button", "ok": .., "id": ..}
+    home/door/event                  {"type": "fingerprint" | "keypad" | "exit_button", "ok": .., "id": ..},
+                                     {"ok": false, "n": 3}, {"ok": false, "locked": true}, {"type": "lockout", ..}
     home/door/open                   <- from the Pi: open the door (the app's "unlock")
+
+The door node guards itself like the real board (pi/door_guard.py): 5 wrong PINs / unknown fingers lock the
+keypad 60 s, then 120, 240 ... 900 s, with no Pi and no internet. Its "flash" is pi/.flash/<node>.json
+(survives unplug / restart of this program; delete the file for a factory reset).
 
 By default the readings are deliberately simple (stage 1a): one person who wanders between rooms,
 temperatures that drift slowly, daylight from the clock. With --world (stage 1e) the digital twin's person
@@ -48,12 +53,16 @@ import threading
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from door_guard import DoorGuard  # noqa: E402
+
 try:
     import paho.mqtt.client as mqtt
 except ImportError:
     sys.exit('paho-mqtt is missing: pip install "paho-mqtt>=2.0,<3"')
 
 SEED = Path(__file__).resolve().parents[1] / "docs" / "seed.json"
+FLASH = Path(__file__).resolve().parent / ".flash"      # each fake node's "flash memory" (gitignored)
 HEARTBEAT_S = 60          # a reading is sent again after this long even if it did not change
 SENSOR_EVERY_S = 5        # how often the sensors are read
 KEEPALIVE_S = 10          # the broker declares a node dead (last will) after ~1.5x this without a word
@@ -328,6 +337,9 @@ class FakeNode:
         self.lock_open_until = 0
         self.muted = False                  # "mute": still online and sending readings, but ignores every order
         self.client = None
+        self.guard = None                   # the door's own lockout (only the node with a lock)
+        if self.lock_dev():
+            self.guard = DoorGuard(clock=getattr(world, "now", time.time), path=Path(args.flash) / f"{name}.json")
 
     # ------------------------------------------------ config: which rooms / sensors / devices are mine
     def apply_config(self, config, announce=True):
@@ -399,6 +411,8 @@ class FakeNode:
             if "rooms" not in cfg:
                 say(self.name, "!!", msg.topic, "has no rooms — ignored")
                 return
+            if self.guard and isinstance(cfg.get("door"), dict):
+                self.guard.configure(cfg["door"])           # lockout settings, kept in flash
             if cfg.get("version") != self.version:         # the same version again (Pi restarted): only ack
                 self.apply_config(cfg)
                 self.subscribe_devices(client)             # a device may have been added or removed
@@ -408,6 +422,8 @@ class FakeNode:
         elif self.muted:
             say(self.name, "!!", msg.topic, "ignored (muted: the node hangs)")
         elif msg.topic == "home/door/open":
+            if self.guard:
+                self.guard.opened_remotely()                # the owner in the app: opens even during a lockout
             self.open_lock(src=body.get("src") or "web")
         elif msg.topic.endswith("/set"):
             dev = msg.topic.split("/")[2]
@@ -516,13 +532,15 @@ class FakeNode:
         self.publish_state(dev, src)
 
     def door_event(self, kind, ok, finger_id=None):
-        """Fingerprint / keypad / exit button at the door. The real node opens the door itself (works offline)."""
-        ev = {"type": kind, "ok": bool(ok)}
-        if finger_id is not None:
-            ev["id"] = finger_id
-        self.publish("home/door/event", json.dumps(ev), force=True)
-        if ok:
+        """Fingerprint / keypad / exit button at the door. The node decides by itself (works offline):
+        door_guard counts the wrong ones and refuses the keypad during a lockout."""
+        opens, events = self.guard.attempt(kind, ok, finger_id)
+        for ev in events:
+            self.publish("home/door/event", json.dumps(ev), force=True)
+        if opens:
             self.open_lock(src=kind)
+        elif events[-1].get("locked"):
+            say(self.name, "**", "keypad locked", f"{self.guard.status()['left_s']} s left - attempt refused")
 
     # ------------------------------------------------ sensors (called every few seconds)
     def tick(self):
@@ -541,6 +559,11 @@ class FakeNode:
                 v = w.reading(self, rid, s)
                 if v is not None:
                     self.publish(f"home/{rid}/{s}", str(int(v)), retain=True)
+        if self.guard:
+            was = self.guard.locked
+            self.guard.tick()
+            if was and not self.guard.locked:
+                say(self.name, "**", "keypad unlocked", "(lockout over)")
         for dev in self.devices:
             if self.is_lock(dev) and self.devices[dev]["v"] and time.time() >= self.lock_open_until:
                 self.devices[dev]["v"] = 0                                  # the door locks itself again
@@ -573,6 +596,7 @@ HELP = """commands:
   finger <id|wrong>     fingerprint at the door, e.g. finger 2
   pin <ok|wrong>        PIN on the door keypad
   exit                  exit button inside the door
+  door                  the door's guard: wrong attempts, round, locked and seconds left
   unplug <node>         power cut: the broker announces "offline" by itself (last will)
   plug <node>           power back: the node connects again
   mute <node>           the node hangs: still online, but answers no order (unmute <node> to fix)
@@ -630,6 +654,10 @@ def console(nodes, world, config, stop):
                 print(f"world time {world.vnow():%a %H:%M:%S} · x{c.clock.speed:g}"
                       + (" · paused" if c.clock.paused else "")
                       + (f" · held by {', '.join(sorted(c.holders))}" if c.holders else ""), flush=True)
+            elif cmd == "door":
+                n = door()
+                print(f"door guard: {n.guard.status()}, settings {n.guard.settings}" if n
+                      else "the door node is not running", flush=True)
             elif cmd in ("finger", "pin", "exit"):
                 n = door()
                 if not n:
@@ -668,6 +696,7 @@ def main():
     ap.add_argument("--broken", action="append", default=[],
                     help="a reading that never arrives, e.g. bathroom/temp or living_fan/power")
     ap.add_argument("--verbose", action="store_true", help="also print heartbeats (unchanged values)")
+    ap.add_argument("--flash", default=str(FLASH), help="folder of the nodes' flash memory (door lockout state)")
     ap.add_argument("--world", action="store_true",
                     help="Ahmed (the digital twin's person, his routine file) lives in the house: pi/world.py")
     ap.add_argument("--speed", type=float, default=0,

@@ -9,6 +9,8 @@
 | `mqtt_ingest.py` | **خدمة Pi** (1b): MQTT ← SQLite (للـ AI) + `/home_state` (مع `base_w` 6.8 W) + `/nodes` + `/events` (زر الجدار، عقدة offline)، ويرسل لكل عقدة جزأها من `/config`. وكل دقيقة: `/summaries` (رسوم التطبيق) و`/energy_daily` (شاشة Energy، يكمل بعد إعادة التشغيل، يوم جديد في منتصف الليل) |
 | `commands.py` | **خدمة Pi** (1c): `/commands` من التطبيق ← `set` للعقدة ← ينتظر ردها 5 ثوانٍ ← done / failed + History. بلا إعادة محاولة تلقائية |
 | `automation.py` | **خدمة Pi** (1d): العقل. القواعد (1d-1) + الـ AI الحقيقي (1d-2: plan كل 15 د، tick كل 5 ث، الأسئلة، التدريب 03:00، نماذج `ai/models/home`). يرى البيت بنفسه عبر MQTT، وينفّذ بـ `src: rule` / `ai`، ويحترم التحكم اليدوي و`/ai_pause`. خيارات: `--no-ai`، `--train-now`، `--ask DEVICE` |
+| `security.py` | **خدمة Pi** (ب): دفتر الباب. يسمع `home/door/event` ← `/access_log` + History + التنبيه الأصفر (أول خطأ) والأحمر (كل قفل) + `/home_state/door`. **كل شيء في SQLite أولاً** (جدول `access`) ثم Firebase، فانقطاع الإنترنت لا يضيّع شيئاً (يُرسل لاحقاً بوقته الأصلي). يبدأ بلا إنترنت بآخر `/config` محفوظ |
+| `door_guard.py` | عقل عقدة الباب (مرجع الـ firmware): 5 أخطاء ← قفل 60 ث، ثم 120، 240 … حتى 900. أثناء القفل: لا رقم سري، والبصمة المعروفة وزر الخروج والتطبيق تفتح. يتذكر بعد انقطاع الكهرباء. يستعمله `fake_nodes.py` و`sim_house.py` |
 | `world.py` | **العالم**: أحمد (روتين `ai/personas`)، وما تراه الحساسات (حضور، حرارة ورطوبة بقصور الغرفة، ضوء النهار)، وما يفعله بيده (أزرار، أجهزة من خطة يومه). مصدر واحد لـ `sim_house.py` و`fake_nodes.py --world` |
 | `scenario_bridge.py`، `run_scenarios.py` | **للاختبار فقط:** سيناريوهات التوأم العشرة على الخدمات الحقيقية (بوابة المرحلة 1) |
 | `hub_clock.py` | **للاختبار فقط:** الساعة المسرّعة المشتركة (`hub/clock`) — العالم ينشرها، والخدمات بـ `--sim-clock` تقرؤها، والـ AI يوقفها أثناء التدريب |
@@ -30,7 +32,9 @@ python pi/mqtt_ingest.py
 python pi/commands.py
 # نافذة 5: العقل (القواعد) — إيقافه لا يوقف البيت
 python pi/automation.py
-# نافذة 6: التطبيق ← http://localhost:3000  (owner@home.test / password123)
+# نافذة 6: دفتر الباب (الباب يحرس نفسه بدونه؛ هذا يسجّل وينبّه)
+python pi/security.py
+# نافذة 7: التطبيق ← http://localhost:3000  (owner@home.test / password123)
 cd web; npm run dev
 ```
 
@@ -55,6 +59,11 @@ python pi/run_scenarios.py                         # العشرة — المتو
 python pi/run_scenarios.py forgot_light guard_hit  # بعضها
 ```
 نفس `pi/scenarios.py` الذي يستعمله التوأم، يعمل داخل `automation` عبر `pi/scenario_bridge.py`: العالم يتحرك عبر `hub/test/world`، والقرارات تمر بالطريق الحقيقي (MQTT ← `automation` ← `set` ← العقدة)، وإجاباتك على الأسئلة تُكتب في Firebase كما يفعل التطبيق.
+
+### الباب (اختبر الأمان)
+
+في كونسول `fake_nodes.py`: `pin wrong` خمس مرات ← قفل 60 ث، `pin ok` أثناء القفل يُرفض، `finger 1` يفتح ويصفّر، `door` يعرض حالة الحارس.
+ذاكرة الباب الدائمة: `pi/.flash/door.json` (احذفه لإعادة ضبط المصنع). اختبارات: `python -m unittest discover -s pi/tests`
 
 ## العقد الوهمية وحدها
 
@@ -95,7 +104,6 @@ python pi/sim_house.py --fast
 mqtt_ingest.py      MQTT  -> SQLite readings + /home_state
 commands.py         /commands -> MQTT .../set   (نفس منطق handle_commands في المحاكي)
 automation.py       القواعد + تنفيذ ai_schedule
-security.py         الباب، access_log، alerts
 camera.py           PIR الخارجي -> تسجيل فيديو على الـ Pi
 fake_nodes.py       يحاكي ESP32 على MQTT (المرحلة 2 من تبديل مصدر البيانات)
 systemd/*.service   تشغيل كل خدمة تلقائياً

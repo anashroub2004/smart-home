@@ -48,7 +48,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import firebase_writer  # noqa: E402
+import house_words  # noqa: E402
 import world  # noqa: E402
+from door_guard import DoorGuard  # noqa: E402
+from security import Security  # noqa: E402
 from firebase_writer import Writer, day_key, now_ms  # noqa: E402
 from person import OUT, Person  # noqa: E402
 from rest_db import PROJECT_ID, RestDB  # noqa: E402
@@ -274,9 +277,7 @@ class House:
         self.sync_retrain = False        # headless runs (learning curve) retrain in place
         self.energy_day = day_key()
         self.energy = dict(w.get_energy_day(self.energy_day))
-        self.failed_door = 0
         self.lock_at = None
-        self.door = {}                   # lockout_until, last_open
         self.scene = None
         self.last = dict(state=0, summary=0, ai=0, random=0, door=0, motion=0, sugg=0)
         self.seen_cmd_at = {}
@@ -349,6 +350,16 @@ class House:
             self.devices[d] = st
         locks = [d for d in self.dev_cfg if self.caps(d).get("lock")]
         self.lock_id = locks[0] if locks else None
+        # the door: the node's own guard (pi/door_guard.py) + the Pi's security.py, the same code as the real hub
+        if not hasattr(self, "security"):
+            self.guard = DoorGuard(clock=CLOCK.now)
+            self.security = Security(self.w, config, CLOCK.now)
+            self.door = self.security.door          # lockout_until, last_open (written with /home_state)
+        else:
+            self.security.load_config(config)
+        th = self.th
+        self.guard.configure({"lockout_attempts": th.get("door_lockout_attempts", 5),
+                              "lockout_s": th.get("door_lockout_s", 60), "lockout_max_s": th.get("door_lockout_max_s", 900)})
         old_rooms = getattr(self, "rooms", {})
         self.rooms = {r: old_rooms.get(r, {"occ": 0}) for r in config["rooms"]}
 
@@ -547,21 +558,19 @@ class House:
     def open_door(self, method, who=None, latency=None, finger=None):
         if not self.lock_id:
             return
-        titles = {"web": "Front door unlocked remotely", "exit_button": "Front door opened from inside"}
-        labels = {"web": "App", "fingerprint": "Fingerprint", "keypad": "Keypad", "exit_button": "Exit button"}
-        shorts = {"web": "Owner · web app", "fingerprint": f"{who} · finger #{finger}",
-                  "keypad": "Correct PIN", "exit_button": "Opened from inside"}
-        whys = {"web": "Remote unlock, confirmed in the app", "fingerprint": "Fingerprint matched on the R503 sensor",
-                "keypad": "Correct PIN on the keypad", "exit_button": "Exit button next to the door"}
-        by_labels = {"web": "Owner (web app)", "fingerprint": f"{who} (fingerprint #{finger})",
-                     "keypad": "Someone with the PIN", "exit_button": "Someone at home"}
-        self.failed_door = 0
-        self.w.log_access(method, True, who)
-        self.set_device(self.lock_id, 1, source=method, src_label=labels[method], group="door", kind="door",
-                        title=titles.get(method, "Front door unlocked"), short=shorts[method], why=whys[method],
-                        by_label=by_labels[method], change="Locked → Unlocked → Locked (5 s)",
-                        latency_ms=latency or random.randint(150, 700), tags=["door"] + (["manual"] if method == "web" else []))
-        self.door["last_open"] = {"at": now_ms(), "method": method, **({"who": who} if who else {})}
+        if method == "web":
+            self.guard.opened_remotely()
+        else:
+            opens, events = self.guard.attempt(method, True, finger)
+            if not opens:                                     # the right PIN during a lockout
+                for ev in events:
+                    self.security.on_door_event(ev)
+                return
+        self.security.opened(method, who, finger, history=False)     # access log + last_open; History below
+        words = house_words.door_open_words(method, who, finger)
+        self.set_device(self.lock_id, 1, source=method, group="door", kind="door",
+                        change="Locked → Unlocked → Locked (5 s)", latency_ms=latency or random.randint(150, 700),
+                        tags=["door"] + (["manual"] if method == "web" else []), **words)
         if method in ("fingerprint", "keypad", "web"):
             self.door_entry_at = CLOCK.now()
             if self.ai and self.ai.recorder:
@@ -578,34 +587,14 @@ class House:
         return f or {"1": "Owner"}
 
     def wrong_attempt(self, method):
-        if now_ms() < self.door.get("lockout_until", 0):
+        """A wrong PIN / unknown finger: the door node's own guard decides, security.py writes it down."""
+        if not self.lock_id:
             return
-        self.failed_door += 1
-        n, limit = self.failed_door, self.th["door_lockout_attempts"]
-        what = "Wrong PIN" if method == "keypad" else "Unknown fingerprint"
-        self.w.log_access(method, False)
-        self.w.log_event("door", "door", f"{what} at the front door", method,
-                         "Keypad" if method == "keypad" else "Fingerprint", result="denied",
-                         device=self.lock_id, room=self.dev_room.get(self.lock_id, "entrance"), node="door", by_label="Unknown",
-                         short="Door stayed locked", why=f"{what} (attempt {n} of {limit})",
-                         change="No change", tags=["door"])
-        if n < limit:
-            if n == 1:
-                self.w.push_alert("warning", f"{what} at the front door",
-                                  f"Front door · {'keypad' if method == 'keypad' else 'fingerprint'} · door stayed locked", "security")
-            return
-        self.failed_door = 0
-        secs = self.th.get("door_lockout_s", 60)
-        self.door["lockout_until"] = now_ms() + secs * 1000
-        self.w.log_event("door", "door", "Keypad locked", "keypad", "Keypad", result="failed",
-                         device=self.lock_id, room=self.dev_room.get(self.lock_id, "entrance"), node="door", by_label="Unknown",
-                         short=f"{limit} wrong PINs · locked {secs} s", why=f"{limit} wrong attempts in a row",
-                         change=f"Keypad blocked for {secs} s", tags=["door", "security"])
-        self.w.push_alert("critical", "Someone is trying to get in", f"Front door · keypad · {limit} wrong PINs",
-                          "security", lines=[f"**{limit} wrong PIN attempts** at the front door",
-                                             f"Today {hhmm()} · Keypad on the door node",
-                                             f"Keypad is blocked for {secs} s. Motion clip was saved."])
-        self.entrance_motion()
+        _, events = self.guard.attempt(method, False)
+        for ev in events:
+            self.security.on_door_event(ev)
+        if events[-1]["type"] == "lockout":
+            self.entrance_motion()
 
     def entrance_motion(self):
         now = vnow()

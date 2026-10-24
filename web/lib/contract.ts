@@ -107,7 +107,8 @@ export interface Thresholds {
   ai_suggest_at: number;
   override_pause_min: number;
   door_lockout_attempts: number;
-  door_lockout_s?: number;
+  door_lockout_s?: number; // first keypad lockout; each later round doubles it
+  door_lockout_max_s?: number; // longest keypad lockout (default 900) — enforced on the door node itself
   pir_hold_s?: number; // a PIR-only room counts as occupied this long after the last motion (Pi side)
 }
 
