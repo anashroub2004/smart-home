@@ -81,6 +81,85 @@ class Outbox:
         return True
 
 
+class Offline(ConnectionError):
+    """Firebase is known to be unreachable right now: the call was not even tried (it would hang)."""
+
+
+class LocalFirstWriter:
+    """A Writer for a service whose own work must never wait for the internet (automation, commands):
+        - the calls in `queued` (History lines, alerts ...) go to the outbox and reach Firebase later
+        - the calls in `fallback` (a command's done / failed) go straight to Firebase when it works (no delay
+          for the app) and to the outbox when it does not
+        - any other call goes straight to Firebase, but while Firebase is known to be down it fails at once
+          (Offline) instead of hanging up to 10 s in the service's loop
+        - start_sender(): a thread empties the outbox and notices when Firebase is back"""
+
+    def __init__(self, writer, outbox, queued=("log_event", "log_access", "push_alert"), fallback=(), retry_s=10.0):
+        self.w, self.out, self.queued, self.fallback, self.retry_s = writer, outbox, set(queued), set(fallback), retry_s
+        self.down = False
+        self.db = _GuardedDB(self)
+
+    def guard(self, fn, *a, **kw):
+        if self.down:
+            raise Offline("Firebase not reachable")
+        try:
+            return fn(*a, **kw)
+        except Exception:
+            if not self.down:
+                say("!! Firebase not reachable: the house goes on, the app catches up later")
+            self.down = True
+            raise
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in self.queued:
+            return lambda *a, **k: self.out.add(name, *a, **k)
+        fn = getattr(self.w, name)
+        if name in self.fallback:
+            return lambda *a, **k: self._direct_or_later(name, fn, a, k)
+        return (lambda *a, **k: self.guard(fn, *a, **k)) if callable(fn) else fn
+
+    def _direct_or_later(self, name, fn, a, k):
+        if self.out.pending() == 0:                         # keep the order: never overtake what waits
+            try:
+                return self.guard(fn, *a, **k)
+            except Exception:  # noqa: BLE001
+                pass
+        self.out.add(name, *a, **k)
+
+    def sender(self, stop):
+        while not stop.is_set():
+            ok = self.out.flush()
+            if ok and self.down:
+                try:
+                    self.w.db.get("config/version")              # a tiny read: is Firebase back?
+                    self.down = False
+                    say("Firebase back")
+                except Exception:  # noqa: BLE001
+                    ok = False
+            elif ok:
+                self.down = False
+            stop.wait(1.0 if ok else self.retry_s)
+
+    def start_sender(self):
+        stop = threading.Event()
+        t = threading.Thread(target=self.sender, args=(stop,), daemon=True)
+        t.start()
+        return stop, t
+
+
+class _GuardedDB:
+    """writer.db (get / put / patch / post / delete) behind the same guard."""
+
+    def __init__(self, lf):
+        self.lf = lf
+
+    def __getattr__(self, name):
+        fn = getattr(self.lf.w.db, name)
+        return (lambda *a, **k: self.lf.guard(fn, *a, **k)) if callable(fn) else fn
+
+
 def keep_config(con, cfg):
     con.execute("INSERT OR REPLACE INTO meta VALUES ('kept_config', ?)", (json.dumps(cfg),))
     con.commit()
