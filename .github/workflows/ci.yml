@@ -33,9 +33,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m py_compile pi/*.py ai/*.py ai/tests/*.py
+      - run: python -m py_compile pi/*.py pi/deploy/*.py pi/tests/*.py ai/*.py ai/tests/*.py
+      - run: bash -n pi/deploy/install.sh
       - run: python -c "import sys; sys.path.insert(0,'pi'); import sim_house, firebase_writer, rest_db"
-      - run: pip install -r ai/requirements.txt
+      - run: pip install -r pi/requirements.txt
       - name: AI unit tests (policy, gate, energy, features, anomaly, runtime, training)
         run: python -m unittest discover -s ai/tests -t . -v
+      - name: Pi unit tests (door guard, security, outbox / local first, ingest offline, commands stream)
+        run: python -m unittest discover -s pi/tests -v
       - run: python -c "import json; json.load(open('docs/seed.json')); json.load(open('database.rules.json'))"

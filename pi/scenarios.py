@@ -418,6 +418,14 @@ class ScenarioRunner:
         if self.h.door_entry_at != c["entry_before"]:
             self.h.door_entry_at = c["entry_before"]   # the scenario walked you in: not a real arrival
         house = self.h.house_snapshot()
+        # the room was made hot at once, but on the real services the new reading needs a few seconds to travel
+        # (world -> MQTT -> the services' picture of the house): wait until the AI's own gate sees it, then ask
+        rooms = house.get("rooms") or {}
+        ready, why = gate.check_on(spec, rooms.get(spec.room) or {}, self.ai.someone_home(house, self.now()),
+                                   self.ai.th.get("light_on_lux", 150), *self.ai.env(spec, rooms))
+        if not ready and m <= 5:
+            c["step"] = f"waiting for the sensors to see the hot room ({why})"
+            return None
         c["sid"] = self.ai.force_suggestion(spec.id, "suggest_on", 0.65, house)
         if not c["sid"]:
             now = self.now()
