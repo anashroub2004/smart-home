@@ -51,10 +51,10 @@ python pi/sim_house.py --cloud C:\dev\secrets\ai-home-key.json --fast
 
 ```powershell
 python pi/fake_nodes.py --world
-python pi/mqtt_ingest.py --cloud C:\dev\secretsi-home-key.json --db ai/data/home_cloud.db
-python pi/commands.py    --cloud C:\dev\secretsi-home-key.json --db ai/data/home_cloud.db
-python pi/automation.py  --cloud C:\dev\secretsi-home-key.json --db ai/data/home_cloud.db
-python pi/security.py    --cloud C:\dev\secretsi-home-key.json --db ai/data/home_cloud.db
+python pi/mqtt_ingest.py --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/commands.py    --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/automation.py  --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/security.py    --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
 ```
 - **بدون `--sim-clock`** (الوقت المسرّع يكتب أوقاتاً مستقبلية في السجل الحقيقي)، وقاعدة SQLite منفصلة `home_cloud.db`.
 - **Avast (أو مضاد فيروسات يفحص HTTPS) على الحاسوب:** يضع شهادته بدل شهادة Google فيرفض Python الاتصال
