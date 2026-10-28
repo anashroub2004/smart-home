@@ -47,6 +47,20 @@ python pi/sim_house.py --cloud C:\dev\secrets\ai-home-key.json --fast
 - ⚠️ الخطة المجانية لها حد تنزيل شهري (10 GB). المحاكي يقلل الاستعلامات في هذا الوضع، لكن **لا تتركه يعمل 24 ساعة** — شغّله للعرض والتجربة فقط.
 - `--reset` يمسح القاعدة الحقيقية بالكامل (يطلب تأكيد YES).
 
+## 2ب) الخدمات الحقيقية على القاعدة الحقيقية (من الحاسوب، قبل الـ Pi)
+
+```powershell
+python pi/fake_nodes.py --world
+python pi/mqtt_ingest.py --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/commands.py    --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/automation.py  --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+python pi/security.py    --cloud C:\dev\secrets\ai-home-key.json --db ai/data/home_cloud.db
+```
+- **بدون `--sim-clock`** (الوقت المسرّع يكتب أوقاتاً مستقبلية في السجل الحقيقي)، وقاعدة SQLite منفصلة `home_cloud.db`.
+- **Avast (أو مضاد فيروسات يفحص HTTPS) على الحاسوب:** يضع شهادته بدل شهادة Google فيرفض Python الاتصال
+  (`CERTIFICATE_VERIFY_FAILED`). الحل: `pip install truststore` مرة واحدة (`pi/cloud_db.py` يستعمله إن وُجد). الـ Pi لا يحتاجه.
+- أوقفها بعد التجربة (الحصة المجانية). على الـ Pi تعمل وحدها عبر systemd (`pi/README.md`).
+
 ## 3) نشر تطبيق الويب
 
 ```powershell

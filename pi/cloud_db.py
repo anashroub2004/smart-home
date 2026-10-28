@@ -13,6 +13,14 @@ from pathlib import Path
 
 from rest_db import RestDB
 
+try:
+    # a PC whose antivirus inspects HTTPS (Avast puts its own certificate in front of Google's): trust what
+    # Windows trusts. Optional (pip install truststore); the Pi has no such antivirus and does not need it.
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 SCOPES = [
     "https://www.googleapis.com/auth/firebase.database",
     "https://www.googleapis.com/auth/userinfo.email",
