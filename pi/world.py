@@ -69,11 +69,13 @@ def sense(h):
             if s.get("occ") and not new:
                 h.end_hands_off(rid)                     # you left: the 2 h hands-off ends with your visit
             s["occ"] = new
-            s["occ_by"] = ("mmwave" if "C1001 mmWave" in room.get("hardware", []) else "pir")
-            hw = room.get("hardware", [])
-            if "C1001 mmWave" in hw:
-                s["mmwave"] = new                            # the radar also sees people sitting still
-            if "PIR" in hw:                                  # PIR only sees movement: it misses still people
+            hw_text = " ".join(room.get("hardware", [])).lower()
+            s["occ_by"] = "mmwave" if "mmwave" in hw_text else "pir"
+            if "mmwave" in hw_text:
+                s["mmwave"] = new                            # the radar (LD2410C) also sees people sitting still
+            if "fc-51" in hw_text:
+                s["pir"] = new                               # FC-51 at the door counts passes: 1 while you are in
+            elif "pir" in hw_text or "ld2410" in hw_text:    # PIR / the radar's "moving": misses still people
                 # movements per minute: walking ~10/min, TV ~2/min, reading ~0.5/min, asleep ~0.1/min
                 rate = PIR_RATE * (1 - h.person.still) ** 2
                 s["pir"] = int(bool(new) and random.random() < 1 - math.exp(-rate * sens_dt / 60))
@@ -92,10 +94,11 @@ def sense(h):
             goal, rate = ((93, 0.18) if rid == "bathroom" and here == rid and act == "Shower"
                           else (base_h, 0.09 if vent else 0.025))
             s["_h"] = s.get("_h", base_h) + (goal - s.get("_h", base_h)) * (1 - (1 - rate) ** (sens_dt / 60))
+        dht11 = "dht11" in " ".join(room.get("hardware", [])).lower()     # whole degrees, like the real part
         if "temp" in sensors:
             if h.persona is not None:
                 # the twin's "hotter / cooler" control (and the scenarios) act at once, outside the room's inertia
-                s["temp"] = round(s["_t"] + h.temp_delta + random.gauss(0, 0.08), 1)
+                s["temp"] = round(s["_t"] + h.temp_delta + random.gauss(0, 0.08), 0 if dht11 else 1)
             else:
                 s["temp"] = round(outdoor + (0.8 if rid == "bedroom" else 0) + (-1.2 if fan_on else 0)
                                   + random.gauss(0, 0.12), 1)

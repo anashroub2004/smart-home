@@ -3,6 +3,8 @@ switches something off on you, and does it by itself only after you said yes oft
 import time
 import unittest
 
+import pandas as pd
+
 from ai import habits, synth, trust
 from ai import settings as S
 from ai.features import load_slots, local_now
@@ -10,6 +12,14 @@ from ai.spec import ai_devices
 
 from .helpers import config, house, memory_db
 from .test_review_regressions import NOW, runtime
+
+
+def last_22h():
+    """The latest 22:00 (local) before NOW."""
+    t = (local_now(NOW).normalize() + pd.Timedelta(hours=22)).tz_localize(S.TZ)
+    if t.timestamp() > NOW:
+        t -= pd.Timedelta(days=1)
+    return int(t.timestamp())
 
 
 def flat(v):
@@ -156,6 +166,9 @@ class Runtime(unittest.TestCase):
         self.assertTrue(asked(rt2))
 
     def test_undo_tonight_one_retry_an_hour_later_once_quiet(self):
+        # "tonight" = the AI's night (noon to noon, runtime.night_of): the story starts at 22:00, whatever the hour
+        # the test runs at — started at 11:00 it would cross noon, where a new night rightly forgets the undo
+        NOW = last_22h()
         rt, sink = self.rt(use=0.05)
         trust.from_history(rt.state, "bedroom_light", "off_still", 9)          # it acts and tells you
         on = {"bedroom_light": {"v": 1, "src": "rule", "watts": 1.2}}

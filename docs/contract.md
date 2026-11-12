@@ -29,6 +29,8 @@
 
 ## `/config` (المثال الكامل في `docs/seed.json`)
 
+`docs/seed.json` = `{ "retired_devices": [...], "config": {...} }`. ارتفاع `seed` يضيف الجديد، ويجعل **قطع** الغرف والأجهزة (`sensors`، `hardware`، `caps`، `hw`، `watts`، وأطراف العقد) تتبع الـ seed، ويحذف `retired_devices`. الأسماء والصلاحيات والقواعد التي غيّرتها في التطبيق تبقى (`pi/sim_house.py upgrade_config`، يطبّقه `mqtt_ingest` عند البدء).
+
 ```json
 {
   "schema": 3, "version": 1, "seed": 2, "home_name": "My Studio",
@@ -81,7 +83,7 @@
 | `rules.on_when_dark` | | يعمل عند الظلام **لحظة دخول شخص** للغرفة (أول فحص بعد بدء الوجود أو خلال 90 ث، `light_on_lux`) — لا يعيد تشغيل ضوء أطفأه شخص نائم أو جالس |
 | `rules.follow_temp` | | يعمل فوق `fan_on_temp` ويُطفأ تحت `fan_off_temp` |
 | `rules.alert_if_off_min` | رقم | للمراقبة: تنبيه إذا توقف أكثر من N دقيقة (ثلاجة) |
-| `hw.out` | `relay` · `pwm` · `ir` · `servo` · `none` | كيف تشغّله العقدة |
+| `hw.out` | `relay` · `pwm` · `ir` · `servo` · `none` | كيف تشغّله العقدة. `relay` = خرج تشغيل/إطفاء (ريليه أو LED مباشرة)، `servo` = سيرفو (FS90R دوران مستمر للمراوح والغسالة: `level` = السرعة؛ SG90 للقفل: زاوية) |
 | `hw.pin` / `hw.button` / `hw.ina` | | طرف الخرج / زر الحائط / عنوان INA226 |
 | `hw.on_above_w` | رقم | للمراقبة: يعتبر "يعمل" فوق هذه القدرة |
 | `icon` | `fan` `light` `washer` `lock` `tv` `fridge` `ac` `heater` `pump` `plug` `generic` `hood` `vent` `kettle` | الشكل فقط — أي قيمة جديدة تظهر بأيقونة عامة (`hood`/`vent`/`kettle` أُضيفت 2026-10-10) |
@@ -221,7 +223,7 @@
 | `home/<room>/<device>/state` | ESP32 → Pi | `{"v":1,"level":70,"src":"button"}` — بعد `set` تعيد العقدة `src` الذي وصلها كما هو (2026-10-21) |
 | `home/<room>/<device>/set` | Pi → ESP32 | `{"v":1,"level":70,"src":"ai"}` أو `{"v":1,"mode":"Cool","src":"web"}` — `src` (اختياري) = من طلب التغيير (`web` · `ai` · `rule` · `scene` …)، العقدة لا تفهمه بل تنسخه في ردها |
 | `home/<room>/<device>/power` | ESP32 → Pi | `{"w":2.9}` — قراءة INA226 (لكل الأجهزة، ومنها تُستنتج حالة أجهزة المراقبة، ويستخدمها الـ AI لكشف الأعطال والهدر) |
-| `home/<room>/mmwave` و `home/<room>/pir` | ESP32 → Pi | `0`/`1` لكل حساس وجود على حدة (الإطفاء الذكي يحتاج الاثنين فارغين). الـ Pi يحسب `occ`: غرفة فيها رادار = الرادار أو الـ PIR، وغرفة PIR فقط = حركة في آخر `thresholds.pir_hold_s` ثانية (افتراضياً 300) |
+| `home/<room>/mmwave` و `home/<room>/pir` | ESP32 → Pi | `0`/`1` لكل حساس وجود على حدة. **LD2410C (2026-11-12):** `mmwave` = أي هدف، `pir` = هدف متحرك. **FC-51 عند باب الغرفة:** `pir` = 1 من الدخول حتى الخروج (العقدة تعدّ المرور) (الإطفاء الذكي يحتاج الاثنين فارغين). الـ Pi يحسب `occ`: غرفة فيها رادار = الرادار أو الـ PIR، وغرفة PIR فقط = حركة في آخر `thresholds.pir_hold_s` ثانية (افتراضياً 300) |
 | `home/door/event` | ESP32 → Pi | `{"type":"fingerprint","ok":true,"id":2}` · خطأ: `{"type":"keypad","ok":false,"n":3}` (`n` = رقم المحاولة في هذه الجولة) · أثناء القفل: `{"type":"keypad","ok":false,"locked":true}` · بداية قفل: `{"type":"lockout","secs":120,"round":2}` — انظر "أمان الباب" |
 | `home/door/open` | Pi → ESP32 | `{}` — الفتح من التطبيق، يعمل أثناء القفل ويُصفّر العدّاد |
 | `home/entrance/door_lock/state` | ESP32 → Pi | `{"v":1,"src":"fingerprint"}` = القفل مفتوح، `{"v":0,"src":"system"}` = أُغلق من جديد بعد `caps.lock.open_s` ثانية. نفس رسالة `state` لأي جهاز (2026-10-21) |

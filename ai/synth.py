@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import routine, store
 from . import settings as S
-from .spec import device_kind
+from .spec import device_kind, doorway_sensor, radar_motion, whole_degrees
 
 
 def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacation=True):
@@ -76,7 +76,7 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
             room_temp[rid] = temp
             lights_on = any(state[d] and devs[d][0] == rid and device_kind(devs[d][1]) == "light" for d in devs)
             if "temp" in sensors:
-                rows.append((ts, f"{rid}/temp", round(temp, 2)))
+                rows.append((ts, f"{rid}/temp", round(temp, 0 if whole_degrees(room) else 2)))   # DHT11: whole
             if "lux" in sensors:
                 rows.append((ts, f"{rid}/lux", round(max(0, lux_sun * 0.75 + (250 if lights_on else 0) + rng.normal(0, 12)), 1)))
             if "occ" in sensors:
@@ -84,7 +84,9 @@ def generate(config, days=70, end_ts=None, seed=42, routine_change_days=0, vacat
                 hw = " ".join(room.get("hardware") or []).lower()
                 if "mmwave" in hw:
                     rows.append((ts, f"{rid}/mmwave", occ))
-                if "pir" in hw:   # PIR misses people who sit or sleep still
+                if doorway_sensor(room):   # FC-51 at the door: 1 while someone is inside
+                    rows.append((ts, f"{rid}/pir", occ))
+                elif "pir" in hw or radar_motion(room):   # PIR / the radar's "moving" miss people who sit still
                     rows.append((ts, f"{rid}/pir", int(occ and rng.random() > still)))
         for dv, (rid, c) in devs.items():
             occ, kind = int(where == rid), device_kind(c)
