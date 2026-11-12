@@ -93,7 +93,9 @@ def presence_sensors(room):
     if "occ" not in (room.get("sensors") or []):
         return []
     hw = " ".join(room.get("hardware") or []).lower()
-    return [s for s, word in (("mmwave", "mmwave"), ("pir", "pir")) if word in hw]
+    return [s for s, word in (("mmwave", "mmwave"), ("pir", "pir")) if word in hw
+            or (s == "pir" and ("fc-51" in hw or "ld2410" in hw))]   # FC-51 at the door: in = 1 / out = 0;
+                                                                        # LD2410C: its "moving target" = pir
 
 
 # ------------------------------------------------------------------ the (very simple) world

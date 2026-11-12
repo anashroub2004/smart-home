@@ -67,12 +67,33 @@ class DeviceSpec:
     control: dict = field(default_factory=dict)
 
 
+def room_hardware(room):
+    return " ".join(room.get("hardware") or []).lower()
+
+
+def doorway_sensor(room):
+    """An FC-51 IR sensor at the room's door (kitchen, bathroom of the mockup): the node counts passes, so it
+    reports 1 while someone is inside and 0 after they leave — on the "pir" topic (docs/contract.md)."""
+    return "fc-51" in room_hardware(room)
+
+
+def radar_motion(room):
+    """An LD2410C reports a moving target as well as any target: the node sends "moving" on the pir topic, so
+    the room keeps both signals (present + moving -> "lying still" when the radar sees you and nothing moves)."""
+    return "ld2410" in room_hardware(room)
+
+
+def whole_degrees(room):
+    """A DHT11: temperature in whole degrees and humidity in whole percent (like the real part)."""
+    return "dht11" in room_hardware(room)
+
+
 def room_presence_keys(rid, room):
-    hw = " ".join(room.get("hardware") or []).lower()
+    hw = room_hardware(room)
     keys = []
     if "mmwave" in hw:
         keys.append(f"{rid}/mmwave")
-    if "pir" in hw:
+    if "pir" in hw or doorway_sensor(room) or radar_motion(room):
         keys.append(f"{rid}/pir")
     return keys
 

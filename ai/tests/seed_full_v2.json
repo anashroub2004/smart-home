@@ -1,0 +1,525 @@
+{
+  "config": {
+    "schema": 3,
+    "version": 2,
+    "seed": 2,
+    "home_name": "My Studio",
+    "nodes": {
+      "living": {
+        "name": "Living room & kitchen node",
+        "reserved_pins": [
+          16,
+          17,
+          21,
+          22,
+          34,
+          35
+        ],
+        "i2c": [
+          "0x44",
+          "0x23"
+        ]
+      },
+      "bedroom": {
+        "name": "Bedroom & bathroom node",
+        "reserved_pins": [
+          16,
+          17,
+          21,
+          22,
+          34,
+          35
+        ],
+        "i2c": [
+          "0x23",
+          "0x44",
+          "0x45"
+        ]
+      },
+      "door": {
+        "name": "Front door node",
+        "reserved_pins": [
+          4,
+          5,
+          13,
+          14,
+          16,
+          17,
+          18,
+          19,
+          21,
+          23,
+          25,
+          26,
+          27,
+          32,
+          33
+        ],
+        "i2c": []
+      }
+    },
+    "rooms": {
+      "living": {
+        "name": "Living room",
+        "node": "living",
+        "order": 1,
+        "sensors": [
+          "temp",
+          "hum",
+          "lux",
+          "occ"
+        ],
+        "hardware": [
+          "C1001 mmWave",
+          "PIR",
+          "SHT31",
+          "BH1750",
+          "INA226"
+        ],
+        "devices": {
+          "living_fan": {
+            "name": "Fan",
+            "icon": "fan",
+            "template": "fan",
+            "caps": {
+              "power": "write",
+              "level": {
+                "steps": [
+                  40,
+                  70,
+                  100
+                ],
+                "labels": [
+                  "Low",
+                  "Medium",
+                  "High"
+                ]
+              },
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "follow_temp": true
+            },
+            "hw": {
+              "out": "pwm",
+              "pin": 25,
+              "button": 32,
+              "ina": "0x40"
+            },
+            "watts": 2.4
+          },
+          "living_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 26,
+              "button": 33,
+              "ina": "0x41"
+            },
+            "watts": 1.2
+          }
+        }
+      },
+      "bedroom": {
+        "name": "Bedroom",
+        "node": "bedroom",
+        "order": 2,
+        "sensors": [
+          "temp",
+          "hum",
+          "lux",
+          "occ"
+        ],
+        "hardware": [
+          "C1001 mmWave",
+          "PIR",
+          "SHT31",
+          "BH1750",
+          "INA226"
+        ],
+        "devices": {
+          "bedroom_fan": {
+            "name": "Fan",
+            "icon": "fan",
+            "template": "fan",
+            "caps": {
+              "power": "write",
+              "level": {
+                "steps": [
+                  40,
+                  70,
+                  100
+                ],
+                "labels": [
+                  "Low",
+                  "Medium",
+                  "High"
+                ]
+              },
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "follow_temp": true
+            },
+            "hw": {
+              "out": "pwm",
+              "pin": 25,
+              "button": 32,
+              "ina": "0x40"
+            },
+            "watts": 2.4
+          },
+          "bedroom_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 26,
+              "button": 33,
+              "ina": "0x41"
+            },
+            "watts": 1.2
+          }
+        }
+      },
+      "kitchen": {
+        "name": "Kitchen",
+        "node": "living",
+        "order": 3,
+        "sensors": [
+          "occ"
+        ],
+        "hardware": [
+          "PIR",
+          "INA226"
+        ],
+        "devices": {
+          "kitchen_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 27,
+              "button": 14,
+              "ina": "0x42"
+            },
+            "watts": 1.2
+          },
+          "kitchen_hood": {
+            "name": "Hood",
+            "icon": "hood",
+            "template": "hood",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 13,
+              "button": 4,
+              "ina": "0x43"
+            },
+            "watts": 2.0
+          },
+          "fridge": {
+            "name": "Fridge",
+            "icon": "fridge",
+            "template": "fridge",
+            "caps": {
+              "power": "read",
+              "energy": "ina"
+            },
+            "control": {
+              "app": false,
+              "button": false,
+              "rules": false,
+              "ai": false
+            },
+            "rules": {
+              "alert_if_off_min": 60
+            },
+            "hw": {
+              "out": "none",
+              "ina": "0x46",
+              "on_above_w": 0.5
+            },
+            "watts": 2.0
+          },
+          "kettle": {
+            "name": "Kettle",
+            "icon": "kettle",
+            "template": "kettle",
+            "caps": {
+              "power": "read",
+              "energy": "ina"
+            },
+            "control": {
+              "app": false,
+              "button": false,
+              "rules": false,
+              "ai": false
+            },
+            "rules": {},
+            "hw": {
+              "out": "none",
+              "ina": "0x47",
+              "on_above_w": 1.0
+            },
+            "watts": 4.0
+          }
+        }
+      },
+      "bathroom": {
+        "name": "Bathroom",
+        "node": "bedroom",
+        "order": 4,
+        "sensors": [
+          "occ",
+          "temp",
+          "hum"
+        ],
+        "hardware": [
+          "PIR",
+          "SHT31 (0x45)",
+          "INA226"
+        ],
+        "devices": {
+          "bathroom_light": {
+            "name": "Lights",
+            "icon": "light",
+            "template": "light",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true,
+              "on_when_dark": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 13,
+              "button": 4,
+              "ina": "0x43"
+            },
+            "watts": 1.2
+          },
+          "bathroom_vent": {
+            "name": "Exhaust fan",
+            "icon": "vent",
+            "template": "vent",
+            "caps": {
+              "power": "write",
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": true,
+              "ai": true
+            },
+            "rules": {
+              "off_when_empty": true
+            },
+            "hw": {
+              "out": "relay",
+              "pin": 18,
+              "button": 19,
+              "ina": "0x46"
+            },
+            "watts": 1.5
+          },
+          "washer": {
+            "name": "Washer",
+            "icon": "washer",
+            "template": "washer",
+            "caps": {
+              "power": "write",
+              "status": true,
+              "energy": "ina"
+            },
+            "control": {
+              "app": true,
+              "button": true,
+              "rules": false,
+              "ai": false
+            },
+            "rules": {},
+            "hw": {
+              "out": "pwm",
+              "pin": 27,
+              "button": 14,
+              "ina": "0x42"
+            },
+            "watts": 3.6
+          }
+        },
+        "windowless": true
+      },
+      "entrance": {
+        "name": "Entrance",
+        "node": "door",
+        "order": 5,
+        "hidden": true,
+        "sensors": [],
+        "hardware": [
+          "R503 fingerprint",
+          "4x4 keypad",
+          "MG996R servo",
+          "Outdoor PIR",
+          "Camera"
+        ],
+        "devices": {
+          "door_lock": {
+            "name": "Front door",
+            "icon": "lock",
+            "template": "lock",
+            "caps": {
+              "lock": {
+                "open_s": 5
+              },
+              "energy": "none"
+            },
+            "control": {
+              "app": true,
+              "button": false,
+              "rules": false,
+              "ai": false,
+              "confirm": true
+            },
+            "rules": {},
+            "hw": {
+              "out": "servo",
+              "pin": 18
+            },
+            "watts": 0
+          }
+        }
+      }
+    },
+    "thresholds": {
+      "fan_on_temp": 28,
+      "fan_off_temp": 26.5,
+      "light_on_lux": 150,
+      "empty_room_off_min": 10,
+      "ai_act_at": 0.8,
+      "ai_suggest_at": 0.6,
+      "override_pause_min": 120,
+      "door_lockout_attempts": 5,
+      "door_lockout_s": 60,
+      "pir_hold_s": 300
+    },
+    "fingerprints": {
+      "1": "Owner",
+      "2": "Fares"
+    },
+    "scenes": {
+      "home": {
+        "name": "Home",
+        "order": 1,
+        "set": {
+          "living_light": 1
+        }
+      },
+      "away": {
+        "name": "Away",
+        "order": 2,
+        "set": {
+          "living_fan": 0,
+          "living_light": 0,
+          "bedroom_fan": 0,
+          "bedroom_light": 0,
+          "washer": 0
+        }
+      },
+      "sleep": {
+        "name": "Sleep",
+        "order": 3,
+        "set": {
+          "living_fan": 0,
+          "living_light": 0,
+          "bedroom_light": 0,
+          "bedroom_fan": {
+            "v": 1,
+            "level": 40
+          }
+        }
+      }
+    }
+  }
+}

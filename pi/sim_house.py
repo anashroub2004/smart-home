@@ -107,7 +107,8 @@ def ensure_owner(w):
 
 
 def seed(w, reset, cloud=False):
-    seed_cfg = json.loads(SEED.read_text(encoding="utf-8"))["config"]
+    seed_file = json.loads(SEED.read_text(encoding="utf-8"))
+    seed_cfg = seed_file["config"]
     config = None if reset else w.get_config()
     if cloud and config and config.get("schema") != seed_cfg.get("schema"):
         sys.exit("The real database has an older data shape. Run again with --reset (it asks before wiping).")
@@ -120,22 +121,31 @@ def seed(w, reset, cloud=False):
         w.put_config(config)
         print(f"seeded /config from {SEED.relative_to(ROOT)}")
         return config
-    upgraded = upgrade_config(config, seed_cfg)
+    return apply_seed_upgrade(w, config, seed_file)
+
+
+def apply_seed_upgrade(w, config, seed_file=None, say=print):
+    """Bring an existing /config up to docs/seed.json (simulator and mqtt_ingest at start). -> the config."""
+    seed_file = seed_file or json.loads(SEED.read_text(encoding="utf-8"))
+    upgraded = upgrade_config(config, seed_file["config"], seed_file.get("retired_devices") or ())
     if upgraded:
         config, added, skipped = upgraded
         w.put_config(config)
-        print(f"/config updated from {SEED.relative_to(ROOT)} (seed {config['seed']}, config v{config['version']}) — "
-              f"added: {', '.join(added) or 'nothing'}" + (f" · skipped (pin taken): {', '.join(skipped)}" if skipped else ""))
+        say(f"/config updated from {SEED.relative_to(ROOT)} (seed {config['seed']}, config v{config['version']}) — "
+            f"{', '.join(added) or 'nothing'}" + (f" · skipped (pin taken): {', '.join(skipped)}" if skipped else ""))
     return config
 
 
-def _taken(config, node):
-    """Pins and INA addresses already used on a node (so an added device never collides with yours)."""
+def _taken(config, node, ignore=()):
+    """Pins and INA addresses already used on a node (so an added device never collides with yours).
+    `ignore`: devices that move together with the seed (their old pins do not count)."""
     pins, inas = set(), set()
     for room in config.get("rooms", {}).values():
         if room.get("node") != node:
             continue
-        for d in (room.get("devices") or {}).values():
+        for did, d in (room.get("devices") or {}).items():
+            if did in ignore:
+                continue
             hw = d.get("hw") or {}
             pins |= {hw[k] for k in ("pin", "button") if hw.get(k) is not None}
             if hw.get("ina"):
@@ -143,10 +153,14 @@ def _taken(config, node):
     return pins, inas
 
 
-def upgrade_config(config, seed_cfg):
-    """A newer docs/seed.json (its `seed` number went up) ADDS what is new — rooms, devices, sensors, nodes —
-    to the existing /config without wiping anything and without touching what you changed in the app.
-    Returns (new config, added, skipped) or None when there is nothing to do."""
+def upgrade_config(config, seed_cfg, retired=()):
+    """A newer docs/seed.json (its `seed` number went up) brings /config up to the mockup's parts without wiping
+    anything and without touching what you changed in the app (names, permissions, rules, scenes you made):
+      - ADDS what is new: rooms, devices, nodes
+      - the PARTS follow the seed: a room's sensors / hardware list, a node's pins / I2C addresses, and a seed
+        device's caps / hw / watts (unless its new pin is taken by a device you added)
+      - REMOVES the devices the seed retired (docs/seed.json "retired_devices", e.g. the fridge of seed 2)
+    Returns (new config, changes, skipped) or None when there is nothing to do."""
     if (config.get("seed") or 1) >= (seed_cfg.get("seed") or 1):
         return None
     new, added, skipped = json.loads(json.dumps(config)), [], []
@@ -156,9 +170,18 @@ def upgrade_config(config, seed_cfg):
             nodes[nid] = n
             added.append(f"node {nid}")
         else:
-            have = nodes[nid].get("i2c") or []
-            nodes[nid]["i2c"] = have + [a for a in n.get("i2c") or [] if a not in have]
+            for k in ("reserved_pins", "i2c"):
+                if k in n:
+                    nodes[nid][k] = n[k]
     rooms = new.setdefault("rooms", {})
+    for rid, r in rooms.items():                               # what the seed retired
+        for did in [d for d in (r.get("devices") or {}) if d in retired]:
+            del r["devices"][did]
+            added.append(f"removed {did}")
+    for sc in (new.get("scenes") or {}).values():
+        for did in [d for d in (sc.get("set") or {}) if d in retired]:
+            del sc["set"][did]
+    seed_devs = {d for r in seed_cfg.get("rooms", {}).values() for d in (r.get("devices") or {})}
     known = {d for r in rooms.values() for d in (r.get("devices") or {})}
     for rid, r in seed_cfg.get("rooms", {}).items():
         if rid not in rooms:
@@ -167,13 +190,23 @@ def upgrade_config(config, seed_cfg):
             known |= set(r.get("devices") or {})
             continue
         cur = rooms[rid]
-        for k in ("sensors", "hardware"):
-            have = cur.get(k) or []
-            cur[k] = have + [x for x in r.get(k) or [] if x not in have]
+        for k in ("sensors", "hardware"):                      # the parts in the room: the seed knows them
+            if k in r:
+                cur[k] = list(r[k])
         if r.get("windowless") and "windowless" not in cur:
             cur["windowless"] = True
         devs = cur.get("devices") or {}
         for did, d in (r.get("devices") or {}).items():
+            if did in devs:                                    # same device, maybe new parts (servo, LED, INA)
+                hw = d.get("hw") or {}
+                pins, inas = _taken(new, cur.get("node"), ignore=seed_devs)
+                if {hw.get("pin"), hw.get("button")} & pins or (hw.get("ina") and hw["ina"] in inas):
+                    skipped.append(did)
+                    continue
+                if any(devs[did].get(k) != d.get(k) for k in ("caps", "hw", "watts")):
+                    devs[did].update({k: json.loads(json.dumps(d[k])) for k in ("caps", "hw", "watts") if k in d})
+                    added.append(f"updated {did}")
+                continue
             if did in known:
                 continue                                   # already there (maybe renamed or moved by you)
             pins, inas = _taken(new, cur.get("node"))

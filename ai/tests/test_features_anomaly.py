@@ -88,7 +88,8 @@ class Anomaly(unittest.TestCase):
         b = anomaly.learn_baselines(con, ["living_fan", "living_light"], NOW - 9 * 86400)
         self.assertIn("living_light", b)
         med = b["living_light"]["on"]["any"][0]
-        self.assertAlmostEqual(med, 1.2, delta=0.1)
+        rated = cfg["rooms"]["living"]["devices"]["living_light"]["watts"]          # what /config says it draws
+        self.assertAlmostEqual(med, rated, delta=rated * 0.1)
 
 
 class Drift(unittest.TestCase):

@@ -365,7 +365,12 @@ def open_firebase(args):
 def first_config(w, args):
     """/config from Firebase. An empty emulator gets docs/seed.json + the owner login (like the simulator)."""
     cfg = w.get_config()
-    if cfg or args.cloud:
+    if cfg:                                       # a newer docs/seed.json: new parts / retired devices (seed number)
+        keep = firebase_writer._clock
+        import sim_house
+        firebase_writer.set_clock(keep)
+        return sim_house.apply_seed_upgrade(w, cfg, say=lambda m: say(m))
+    if args.cloud:
         return cfg
     keep = firebase_writer._clock
     import sim_house                                  # setup helpers only (it also swaps in a virtual clock)

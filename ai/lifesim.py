@@ -35,6 +35,7 @@ from pathlib import Path
 from . import settings as S
 from . import store
 from .persona import OUT, Persona, utc_offset
+from .spec import doorway_sensor, radar_motion, whole_degrees
 
 WINDOW = {"living": 0.75, "kitchen": 0.5, "bedroom": 0.6, "bathroom": 0.0}   # share of daylight reaching the room
 PIR_RATE = 12.0
@@ -115,8 +116,10 @@ def simulate(config, persona=None, days=365, end_date=None, con=None, seed=7, pr
     R = roles(config)
     rooms = {rid: r for rid, r in config["rooms"].items()}
     radar = {rid for rid, r in rooms.items() if "mmwave" in " ".join(r.get("hardware") or []).lower()}
-    pir_rooms = {rid for rid, r in rooms.items() if "pir" in " ".join(r.get("hardware") or []).lower()
-                 and "occ" in (r.get("sensors") or [])}
+    pir_rooms = {rid for rid, r in rooms.items() if ("pir" in " ".join(r.get("hardware") or []).lower()
+                 or radar_motion(r)) and "occ" in (r.get("sensors") or []) and not doorway_sensor(r)}
+    doorway = {rid for rid, r in rooms.items() if doorway_sensor(r) and "occ" in (r.get("sensors") or [])}
+    coarse = {rid for rid, r in rooms.items() if whole_degrees(r)}           # DHT11: whole degrees / percent
     th = config.get("thresholds") or {}
     dark = float(th.get("light_on_lux", 150))
     hab = persona.d.get("habits", {})
@@ -317,9 +320,9 @@ def simulate(config, persona=None, days=365, end_date=None, con=None, seed=7, pr
                 sensors = r.get("sensors") or []
                 occ = int(room == rid)
                 if "temp" in sensors:
-                    vals[f"{rid}/temp"] = round(temp[rid] + rnd.gauss(0, 0.08), 2)
+                    vals[f"{rid}/temp"] = round(temp[rid] + rnd.gauss(0, 0.08), 0 if rid in coarse else 2)
                 if "hum" in sensors:
-                    vals[f"{rid}/hum"] = round(hum[rid] + rnd.gauss(0, 0.6), 1)
+                    vals[f"{rid}/hum"] = round(hum[rid] + rnd.gauss(0, 0.6), 0 if rid in coarse else 1)
                 if "lux" in sensors:
                     lamps = 250 if any(devs[x]["v"] for x in R["light"].get(rid, [])) else 0
                     vals[f"{rid}/lux"] = round(max(0.0, sun * WINDOW.get(rid, 0.5) + lamps + rnd.gauss(0, 6)), 1)
@@ -327,7 +330,9 @@ def simulate(config, persona=None, days=365, end_date=None, con=None, seed=7, pr
                     vals[f"{rid}/occ"] = occ
                     if rid in radar:
                         vals[f"{rid}/mmwave"] = occ
-                    if rid in pir_rooms:
+                    if rid in doorway:
+                        vals[f"{rid}/pir"] = occ                   # FC-51 at the door: 1 while you are in
+                    elif rid in pir_rooms:
                         rate = PIR_RATE * (1 - still) ** 2
                         vals[f"{rid}/pir"] = int(occ and rnd.random() < 1 - math.exp(-rate))
             for dev, st in devs.items():
