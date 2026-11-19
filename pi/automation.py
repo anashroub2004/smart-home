@@ -52,7 +52,7 @@ import house_words  # noqa: E402
 from firebase_writer import Writer, now_ms  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
 import mqtt_auth  # noqa: E402
-from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
+from outbox import LocalFirstWriter, Offline, Outbox, keep_config, start_config  # noqa: E402
 
 TICK_S = 5.0              # rules + AI tick every 5 s
 PLAN_S = 900.0            # the AI's plan for the next hour every 15 min ("Next hour" in the app)
@@ -586,14 +586,9 @@ def main():
     w, where = open_firebase(args)
     from ai import store
     con = store.connect(args.db)
-    try:
-        config = w.get_config()
-        if not config:
-            sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
-        keep_config(con, config)
-    except (RuntimeError, OSError) as e:                       # no internet at start: the brain still starts
-        say(f"!! cannot reach Firebase ({where}): {e} — using the last /config kept in SQLite")
-        config = kept_config(con)
+    config = start_config(con, w.get_config, where)            # no internet / bad clock: the brain still starts
+    if not config:
+        sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
     # local first: History lines + alerts wait in SQLite, other Firebase calls never hold up the rules or the AI
     lf = LocalFirstWriter(w, Outbox(con, w, sim.now if sim else time.time, table="automation_outbox"))
     stop_sender, sender = lf.start_sender()

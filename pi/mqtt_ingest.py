@@ -46,7 +46,7 @@ import house_state  # noqa: E402
 import house_words  # noqa: E402
 import mqtt_auth  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
-from outbox import Outbox, keep_config, kept_config, read_config  # noqa: E402
+from outbox import Outbox, read_config, start_config  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
@@ -401,14 +401,9 @@ def main():
     w, where = open_firebase(args)
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     con = store.connect(args.db)
-    try:
-        config = first_config(w, args)
-        if not config:
-            sys.exit("/config is empty in the real database: set it up first (see docs/DEPLOY.md)")
-        keep_config(con, config)
-    except (RuntimeError, OSError) as e:                       # no internet at start: the house still starts
-        say(f"!! cannot reach Firebase ({where}): {e} — using the last /config kept in SQLite")
-        config = kept_config(con)
+    config = start_config(con, lambda: first_config(w, args), where)  # no internet / bad clock: the house starts
+    if not config:
+        sys.exit("/config is empty in the real database: set it up first (see docs/DEPLOY.md)")
     ing = Ingest(w, con, config, args, clock=sim)
     say(f"Firebase: {where} · SQLite: {args.db} · config v{config.get('version')} · "
         f"PIR hold {ing.th.get('pir_hold_s', house_state.PIR_HOLD_S)} s")
