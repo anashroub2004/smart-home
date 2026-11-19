@@ -185,3 +185,18 @@ def read_config(w, con, quiet=False):
         if not quiet:
             say(f"!! cannot read /config ({type(e).__name__}): using the last one kept in SQLite")
     return None if quiet else kept_config(con)
+
+
+def start_config(con, read, where):
+    """/config when a service starts: read() (kept in SQLite), or the kept one when it fails for ANY reason.
+    Not only no internet (OSError): with no RTC battery the Pi boots with an old clock and Google refuses the
+    token (google.auth RefreshError) until NTP fixes the time. That used to crash ingest, commands and automation
+    in a loop at every boot. Returns read()'s empty answer as is, so the caller can stop on an empty database."""
+    try:
+        cfg = read()
+    except Exception as e:  # noqa: BLE001 — the house starts anyway; the periodic check catches up later
+        say(f"!! cannot reach Firebase ({where}): {type(e).__name__}: {e} — using the last /config kept in SQLite")
+        return kept_config(con)
+    if cfg:
+        keep_config(con, cfg)
+    return cfg

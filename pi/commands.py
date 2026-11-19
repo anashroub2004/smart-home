@@ -54,7 +54,7 @@ import house_words  # noqa: E402
 from firebase_writer import Writer  # noqa: E402
 from mqtt_exec import MqttExecutor  # noqa: E402
 import mqtt_auth  # noqa: E402
-from outbox import LocalFirstWriter, Offline, Outbox, keep_config, kept_config  # noqa: E402
+from outbox import LocalFirstWriter, Offline, Outbox, keep_config, start_config  # noqa: E402
 from ai import store  # noqa: E402
 from ai import settings as AIS  # noqa: E402
 
@@ -331,14 +331,9 @@ def main():
     raw, where = open_firebase(args)
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     con = store.connect(args.db)
-    try:
-        config = raw.get_config()
-        if not config:
-            sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
-        keep_config(con, config)
-    except (RuntimeError, OSError) as e:                       # no internet at start: wait for it quietly
-        say(f"!! cannot reach Firebase ({where}): {e} — using the last /config kept in SQLite")
-        config = kept_config(con)
+    config = start_config(con, raw.get_config, where)          # no internet / bad clock: wait for it quietly
+    if not config:
+        sys.exit("/config is empty: start mqtt_ingest.py first (it seeds an empty emulator)")
     # History lines wait in SQLite; done / failed go straight to the app when it can, else they wait too
     w = LocalFirstWriter(raw, Outbox(con, raw, sim.now if sim else time.time, table="commands_outbox"),
                          fallback=("ack_command", "patch_home_state"))
