@@ -104,6 +104,10 @@ def args():
             w, h = a[i + 1].lower().split("x"); o["res"] = (int(w), int(h)); i += 1
         elif k == "--eevee":
             o["eevee"] = True
+        elif k == "--frames":                     # e.g. --frames 180-260 (part of the animation, for tests)
+            a0, a1 = a[i + 1].split("-"); o["frames"] = (int(a0), int(a1)); i += 1
+        elif k == "--views":                      # orthographic x-ray views to renders/views/
+            o["views"] = True
         elif k == "--wire-colors":
             global WIRE_COLOR_MODE
             WIRE_COLOR_MODE = a[i + 1]; i += 1
@@ -1262,10 +1266,11 @@ def build_cameras_lights():
     top_ob.location = Vector((51.5, 30, 150)) * CM
     CAMS["06_cables_top"] = (top_ob, F_WIRES_HOLD)
     # orbiting camera for the assembly animation
-    pivot = empty("Cam_anim_orbit", Vector((44, 30, 0)) * CM, c, size=0.05)
-    cam = camera("Cam_anim", (44 + 145, 30 - 60, 95), (44, 30, 0), 32)
+    # high (~54 deg) and close enough to look over the 25 cm walls into the rooms and onto the cables
+    pivot = empty("Cam_anim_orbit", Vector((54, 30, 0)) * CM, c, size=0.05)
+    cam = camera("Cam_anim", (54 + 68, 30 - 58, 125), (54, 30, -1), 26)
     cam.parent = pivot
-    cam.location = Vector((145, -60, 95)) * CM
+    cam.location = Vector((68, -58, 125)) * CM
     edit = bpy.context.preferences.edit
     old = edit.keyframe_new_interpolation_type
     edit.keyframe_new_interpolation_type = "LINEAR"
@@ -1388,9 +1393,89 @@ def render_stills():
     sc.camera = bpy.data.objects["Cam_anim"]
 
 
-def render_anim(path):
+# orthographic views (x-ray): name -> (camera location cm, rotation deg, ortho scale m, resolution)
+VIEWS = {
+    "top":    ((51, 30, 200), (0, 0, 0), 1.16, (2400, 1500)),
+    "bottom": ((51, 30, -200), (180, 0, 0), 1.16, (2400, 1500)),
+    "south":  ((51, -200, 9), (90, 0, 0), 1.16, (2400, 900)),
+    "north":  ((51, 260, 9), (90, 0, 180), 1.16, (2400, 900)),
+    "east":   ((300, 30, 9), (90, 0, 90), 0.74, (2000, 1100)),
+    "west":   ((-200, 30, 9), (90, 0, -90), 0.74, (2000, 1100)),
+    "iso_se": (None, (58, 0, 40), 1.42, (2400, 1500)),
+    "iso_nw": (None, (58, 0, 220), 1.42, (2400, 1500)),
+}
+GHOST_MATS = {"foam_white": "wall", "floor": "floor", "base_board": "base", "glass": "wall", "door_leaf": "wall"}
+
+
+def ghost_house():
+    """Walls, floors and furniture become faint glass so every part and cable shows through (renders only)."""
+    g = {"wall": mat("ghost_wall", (0.70, 0.76, 0.85), 0.5, alpha=0.06),
+         "floor": mat("ghost_floor", (0.85, 0.85, 0.82), 0.5, alpha=0.04),
+         "base": mat("ghost_base", (0.20, 0.22, 0.26), 0.6, alpha=0.10),
+         "furn": mat("ghost_furniture", (0.62, 0.46, 0.32), 0.6, alpha=0.10)}
+    furn = set(COLL["Furniture"].all_objects) if "Furniture" in COLL else set()
+    for ob in bpy.data.objects:
+        if ob.type not in ("MESH", "CURVE") or not ob.material_slots:
+            continue
+        for slot in ob.material_slots:
+            if slot.material is None:
+                continue
+            kind = "furn" if ob in furn else GHOST_MATS.get(slot.material.name)
+            if kind:
+                slot.link = "OBJECT"
+                slot.material = g[kind]
+                ob.visible_shadow = False
+
+
+def render_views():
+    sc = bpy.context.scene
+    out = os.path.join(MOCKUP_DIR, "renders", "views")
+    os.makedirs(out, exist_ok=True)
+    sc.frame_set(F_END)
+    ghost_house()
+    sc.cycles.transparent_max_bounces = 64
+    sc.cycles.max_bounces = 6
+    try:
+        sc.view_settings.view_transform = "Standard"
+        sc.view_settings.exposure = -0.45
+    except TypeError:
+        pass
+    for name in ("Environment",):
+        if name in COLL:
+            COLL[name].hide_render = True
+    world = sc.world
+    bg = next((n for n in world.node_tree.nodes if n.type == "BACKGROUND"), None)
+    if bg:
+        bg.inputs["Color"].default_value = (0.93, 0.94, 0.96, 1.0)
+        bg.inputs["Strength"].default_value = 0.85
+    cam_d = bpy.data.cameras.new("Cam_view")
+    cam_d.type = "ORTHO"
+    cam_d.clip_start, cam_d.clip_end = 0.01, 10
+    cam = bpy.data.objects.new("Cam_view", cam_d)
+    coll("Cameras").objects.link(cam)
+    sc.camera = cam
+    sc.render.image_settings.file_format = "JPEG"
+    sc.render.image_settings.quality = 92
+    centre = Vector((51, 30, 6))
+    for name, (loc, rot, scale, res) in VIEWS.items():
+        e = Euler([math.radians(r) for r in rot])
+        if loc is None:                                  # isometric: back off along the view direction
+            back = e.to_matrix() @ Vector((0, 0, 1))
+            loc = centre + back * 250
+        cam.location = Vector(loc) * CM
+        cam.rotation_euler = e
+        cam_d.ortho_scale = scale
+        sc.render.resolution_x, sc.render.resolution_y = res
+        sc.render.filepath = os.path.join(out, f"{name}.jpg")
+        print("[mockup] rendering", sc.render.filepath)
+        bpy.ops.render.render(write_still=True)
+
+
+def render_anim(path, frames=None):
     sc = bpy.context.scene
     sc.camera = bpy.data.objects["Cam_anim"]
+    if frames:
+        sc.frame_start, sc.frame_end = frames
     path = os.path.abspath(path)
     try:
         try:
@@ -1445,7 +1530,9 @@ def main():
     if o["render"]:
         render_stills()
     if o["anim"]:
-        render_anim(o["anim"])
+        render_anim(o["anim"], o.get("frames"))
+    if o.get("views"):                           # last: it swaps the house materials for ghost ones
+        render_views()
 
 
 main()
