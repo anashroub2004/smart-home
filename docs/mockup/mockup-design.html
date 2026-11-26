@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Smart Home Mockup Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an architect's drawing sheet — title block, 3D model, dimensioned plan, schedules. Paper / blueprint. */
+:root {
+  --bg: #f6f7f9; --paper: #ffffff; --ink: #18243a; --muted: #5a6680; --line: #c9d1de; --grid: #e6eaf1;
+  --accent: #1f5fbf; --accent-soft: #e3ecfa;
+  --living: #0f8b8d; --bedroom: #c47a12; --door: #c2413b; --hub: #6b4fbb;
+  --wall: #2b3a55; --floor: #eef1f6; --win: #7fb6ea; --furn: #b9c3d3;
+  --sans: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1424; --paper: #121b2f; --ink: #e4ebf7; --muted: #9aa8c2; --line: #2c3a58; --grid: #1a2540;
+  --accent: #6ea8ff; --accent-soft: #1b2b4d;
+  --living: #3cc3c4; --bedroom: #f0a640; --door: #f0706a; --hub: #a58cf0;
+  --wall: #c8d4ea; --floor: #18233b; --win: #4f8fd0; --furn: #3d4b68; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d1424; --paper: #121b2f; --ink: #e4ebf7; --muted: #9aa8c2; --line: #2c3a58; --grid: #1a2540;
+  --accent: #6ea8ff; --accent-soft: #1b2b4d;
+  --living: #3cc3c4; --bedroom: #f0a640; --door: #f0706a; --hub: #a58cf0;
+  --wall: #c8d4ea; --floor: #18233b; --win: #4f8fd0; --furn: #3d4b68; color-scheme: dark }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.65; }
+.sheet { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; display: grid; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.3; margin: 0; }
+h1 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); font-weight: 700; }
+h2 { font-size: 1.25rem; font-weight: 700; }
+h3 { font-size: 1rem; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
+
+/* title block */
+.titleblock { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: end;
+  border-bottom: 2px solid var(--ink); padding-bottom: 16px; }
+.eyebrow { font-size: .8rem; color: var(--muted); letter-spacing: .04em; }
+.stamp { display: grid; grid-template-columns: auto auto; gap: 2px 14px; font-size: .82rem;
+  border: 1px solid var(--line); background: var(--paper); padding: 10px 14px; }
+.stamp dt { color: var(--muted); } .stamp dd { margin: 0; font-weight: 500; }
+@media (max-width: 640px) { .titleblock { grid-template-columns: 1fr; } }
+
+.keyfacts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.fact { background: var(--paper); border: 1px solid var(--line); padding: 12px 14px; }
+.fact b { display: block; font-family: var(--mono); font-size: 1.3rem; direction: ltr; text-align: right; }
+.fact span { color: var(--muted); font-size: .85rem; }
+
+section { display: grid; gap: 12px; min-width: 0; }
+.panel { background: var(--paper); border: 1px solid var(--line); min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+.toolbar .sp { flex: 1; }
+.chip { font: inherit; font-size: .82rem; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  padding: 4px 10px; cursor: pointer; border-radius: 999px; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#view3d { position: relative; height: min(62vh, 540px); min-height: 320px; touch-action: none; }
+#view3d canvas { display: block; }
+.info3d { position: absolute; top: 10px; inset-inline-start: 10px; z-index: 2; display: grid; gap: 2px; max-width: min(320px, 80%);
+  background: var(--paper); border: 1px solid var(--line); border-inline-start: 3px solid var(--accent); padding: 8px 10px; font-size: .82rem; }
+.lbl { font-family: var(--mono); font-size: 11px; color: var(--ink); background: color-mix(in srgb, var(--paper) 85%, transparent);
+  border: 1px solid var(--line); padding: 0 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; direction: ltr; }
+.lbl.room { font-family: var(--sans); font-size: 12px; font-weight: 700; border: 0; background: transparent; }
+.hint { font-size: .8rem; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); }
+
+.planwrap { overflow-x: auto; padding: 8px; }
+#plan { display: block; width: 100%; min-width: 620px; height: auto; direction: ltr; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: .82rem; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-inline-end: 6px; vertical-align: -1px; }
+.legend i.sq { border-radius: 2px; }
+
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .86rem; }
+th, td { border-bottom: 1px solid var(--line); padding: 7px 10px; text-align: right; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: .78rem; letter-spacing: .03em; background: var(--bg); position: sticky; top: 0; }
+td.n { font-family: var(--mono); direction: ltr; text-align: left; white-space: nowrap; }
+.pill { display: inline-block; font-size: .72rem; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pill.have { color: var(--living); } .pill.buy { color: var(--bedroom); } .pill.planned { color: var(--door); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-inline-end: 6px; }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.note { background: var(--paper); border: 1px solid var(--line); border-inline-start: 3px solid var(--accent); padding: 12px 14px; display: grid; gap: 6px; }
+.note.warn { border-inline-start-color: var(--door); }
+.note p { font-size: .9rem; }
+.questions { background: var(--accent-soft); border: 1px solid var(--accent); padding: 14px 16px; display: grid; gap: 8px; }
+.questions ol { margin: 0; padding-inline-start: 20px; display: grid; gap: 4px; font-size: .92rem; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+
+<div class="sheet" dir="rtl" lang="ar">
+  <header class="titleblock">
+    <div style="display:grid;gap:6px;min-width:0">
+      <div class="eyebrow">مشروع التخرج · AI-Driven Adaptive Smart and Secure Home</div>
+      <h1>مخطط المجسّم: توزيع الغرف والقطع</h1>
+      <p>شقة استوديو حديثة بأربع مساحات: صالة ومطبخ مفتوحان على بعض، وغرفة نوم، وحمام. تصميم هندسي بمقياس <b class="num">1:10</b>: كل <span class="num">1 cm</span> في المجسّم = <span class="num">10 cm</span> في الحقيقة. النموذج الثلاثي الأبعاد والمسقط الأفقي مرسومان من نفس البيانات، فأي قياس هنا هو نفسه هناك.</p>
+    </div>
+    <dl class="stamp">
+      <dt>الإصدار</dt><dd class="num">v2 · 2026-11-26</dd>
+      <dt>المقياس</dt><dd class="num">1 : 10</dd>
+      <dt>الوحدات</dt><dd>سم (المجسّم) / م (الحقيقة)</dd>
+      <dt>الحالة</dt><dd>مسودة للنقاش</dd>
+    </dl>
+  </header>
+
+  <div class="keyfacts">
+    <div class="fact"><b>80 × 60 cm</b><span>قاعدة البيت (8 × 6 م حقيقي، 48 م²)</span></div>
+    <div class="fact"><b>4</b><span>مساحات: صالة + مطبخ مفتوحان، غرفة نوم، حمام</span></div>
+    <div class="fact"><b>25 cm</b><span>ارتفاع الجدران (2.5 م حقيقي)، بلا سقف للرؤية</span></div>
+    <div class="fact"><b>3 cm</b><span>أرضية مزدوجة: مسار كل الأسلاك إلى الـ Hub</span></div>
+    <div class="fact"><b>Hub</b><span>وحدة خارجية بجانب البيت: الـ Pi والراوتر والعقد والكهرباء</span></div>
+  </div>
+
+  <section>
+    <h2>النموذج الثلاثي الأبعاد</h2>
+    <div class="panel">
+      <div class="toolbar" role="group" aria-label="View options">
+        <button class="chip" id="b-furn" aria-pressed="true">الأثاث</button>
+        <button class="chip" id="b-comp" aria-pressed="true">القطع</button>
+        <button class="chip" id="b-wire" aria-pressed="true">الأسلاك</button>
+        <button class="chip" id="b-floor" aria-pressed="false">أرضية شفافة</button>
+        <button class="chip" id="b-lbl" aria-pressed="true">الأرقام</button>
+        <button class="chip" id="b-low" aria-pressed="false">جدران منخفضة</button>
+        <span class="sp"></span>
+        <button class="chip" id="v-iso">منظور</button>
+        <button class="chip" id="v-top">من الأعلى</button>
+        <button class="chip" id="v-kitchen">المطبخ</button>
+        <button class="chip" id="v-bedroom">غرفة النوم</button>
+        <button class="chip" id="v-wires">مسار الأسلاك</button>
+      </div>
+      <div id="view3d" aria-label="3D model of the mockup"><div id="info3d" class="info3d" hidden></div></div>
+      <div class="hint">اسحب لتدوير المجسّم، وكبّر بعجلة الماوس أو بإصبعين. اضغط على أي قطعة لترى اسمها ومكانها. "مسار الأسلاك" يجعل الأرضية شفافة ويُظهر كل سلك من قطعته، تحت الأرض، إلى الـ Hub، بلون عقدته.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>المسقط الأفقي مع القياسات</h2>
+    <div class="panel">
+      <div class="planwrap"><svg id="plan" role="img" aria-label="Dimensioned floor plan"></svg></div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>جدول الغرف</h2>
+    <div class="panel tablewrap"><table id="t-rooms"></table></div>
+  </section>
+
+  <section>
+    <h2>جدول القطع وأماكن التركيب</h2>
+    <p style="color:var(--muted);font-size:.88rem">الإحداثيات بالسنتيمتر من الزاوية الجنوبية الغربية للقاعدة (x نحو الشرق، y نحو الشمال، z الارتفاع فوق الأرضية). الأرقام تطابق الدوائر في المسقط.</p>
+    <div class="panel tablewrap"><table id="t-comp"></table></div>
+  </section>
+
+  <section>
+    <h2>قائمة القصّ (فوم بورد 5 mm)</h2>
+    <div class="panel tablewrap"><table id="t-cut"></table></div>
+  </section>
+
+  <section>
+    <h2>ملاحظات هندسية</h2>
+    <div class="notes">
+      <div class="note warn"><h3>الرادار يرى عبر الفوم</h3><p>موجات LD2410C تخترق الفوم والكرتون. رادار الصالة قد يرى يداً في غرفة النوم والعكس. الحل: الراداران على الجدار الغربي وينظران شرقاً (لا نحو الجدار المشترك)، وتقليل أقصى مسافة كشف في إعدادات LD2410C، وورق ألمنيوم على الجدار بين الصالة وغرفة النوم.</p></div>
+      <div class="note"><h3>رادار واحد للصالة والمطبخ</h3><p>الصالة والمطبخ مساحة واحدة مفتوحة طولها 80 سم، فرادار واحد يغطيها كلها، وحساس ضوء واحد يكفيها. المطبخ يأخذ "يوجد شخص" و"الإضاءة" من حساسات الصالة. هذا يوفر قطعاً ويطابق شقة الاستوديو الحقيقية.</p></div>
+      <div class="note warn"><h3>من هو "الساكن" في العرض؟</h3><p>الرادار يكشف إنساناً حقيقياً لا دمية. في العرض، <b>يد أحد أعضاء الفريق</b> هي أحمد: تدخل الغرفة فيكشفها الرادار، وتمر من باب الحمام فيعدّها FC-51. لذلك المجسّم بلا سقف.</p></div>
+      <div class="note"><h3>حساسات الضوء تنظر للنافذة</h3><p>BH1750 وTSL2561 على الجدار المقابل للنافذة وبعيداً عن الـ LED، حتى تقيس ضوء النهار لا ضوء اللمبة. النوافذ مفتوحة، ومصباح مكتب خارجي يمثل الشمس.</p></div>
+      <div class="note"><h3>FC-51 عند باب الحمام</h3><p>مداه 2 إلى 30 سم تقريباً. يُثبّت على جانب الباب على ارتفاع 3 سم وينظر عبر فتحة عرضها 8 سم. العقدة تعدّ المرور: 1 بالداخل، 0 خرج.</p></div>
+      <div class="note"><h3>الـ Hub: وحدة خارجية</h3><p>صندوق بجانب الجدار الشرقي (<span class="num">18 × 26 × 10 cm</span>): الـ Pi 5 وشاحنه 27W، والراوتر، ولوحا الـ ESP32 على لوحتي التوسعة، وINA226 الثلاثة، ومصدر 5V مع المكثّف. كل أسلاك البيت تخرج إليه من تحت الأرضية عبر فتحة واحدة. البيت نظيف (حساسات وأضواء فقط)، والإلكترونيات في مكان واحد يراه الجمهور.</p></div>
+      <div class="note warn"><h3>طول الأسلاك</h3><p>أبعد قطعة عن الـ Hub نحو 1 م. حساسات الضوء (I2C) حساسة للطول: سلك جيد مجدول، وسرعة I2C منخفضة (50–100 kHz) في الكود، وإن لزم موسّع I2C. DHT11 والرادار (UART) وإشارة السيرفو والأزرار تتحمل المتر. كل سلك عليه ملصق باسم القطعة.</p></div>
+      <div class="note"><h3>الكهرباء</h3><p>مصدر 5V 2A للعقد والرادارات والسيرفو، وGND مشترك للجميع، ومكثّف 470–1000µF على خط السيرفو، ولا تتحرك السيرفو الثلاثة معاً بقوة. الـ Pi بشاحنه 27W منفصلاً.</p></div>
+      <div class="note"><h3>قطع لاحقة (متقطّعة في الرسم)</h3><p>عقدة الباب (ESP32 الثالث في الـ Hub، بصمة R503 ولوحة أرقام خارج الباب، سيرفو SG90 رابع للقفل، بازر، FC-51 لفتح الباب). أماكنها محجوزة الآن حتى لا نعيد القص.</p></div>
+    </div>
+  </section>
+
+  <div class="questions">
+    <h3>قرارات تنتظر الفريق</h3>
+    <ol>
+      <li>هل القاعدة <span class="num">80 × 60 cm</span> مناسبة لطاولة العرض ولألواح الفوم المتوفرة (<span class="num">70 × 100</span> أو <span class="num">50 × 70</span>)؟</li>
+      <li>ارتفاع الجدران <span class="num">25 cm</span> (واقعي) أم <span class="num">20 cm</span> (رؤية أسهل)؟</li>
+      <li>الباب الرئيسي على الجدار الجنوبي (الحالي) أم على جانب آخر؟</li>
+      <li>الـ Hub على الجانب الشرقي (الحالي) أم خلف البيت (الشمال)؟</li>
+      <li>الأثاث: مطبوع ثلاثي الأبعاد، أم فوم وكرتون، أم مكعبات ملونة؟</li>
+    </ol>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+<script>
+// ---------------------------------------------------------------- one model, drawn twice (3D + plan)
+const W = 80, D = 60, H = 25, HLOW = 9, T = 0.5;        // cm, scale 1:10
+const ROOMS = [
+  { id: "living",   en: "Living + kitchen", ar: "الصالة + المطبخ", x: 0,  y: 0,  w: 80, d: 34 },
+  { id: "bedroom",  en: "Bedroom",          ar: "غرفة النوم",      x: 0,  y: 34, w: 56, d: 26 },
+  { id: "bathroom", en: "Bathroom",         ar: "الحمام",          x: 56, y: 34, w: 24, d: 26 },
+];
+// the open space has two zones (no wall between them)
+const ZONES = [{ en: "Living", x: 0, w: 50 }, { en: "Kitchen", x: 50, w: 30 }];
+// the hub box outside, beside the east wall
+const HUB = { x: 84, y: 18, w: 18, d: 26, h: 10 };
+// wall segments: a = start, b = end (axis-aligned), openings along the wall: [from, to, z0, z1, kind]
+const WALLS = [
+  { a: [0, 0],   b: [80, 0],  open: [[6, 26, 8, 18, "window"], [36, 44, 0, 20, "door"], [56, 70, 8, 18, "window"]] },
+  { a: [0, 60],  b: [80, 60], open: [[14, 34, 8, 18, "window"]] },
+  { a: [0, 0],   b: [0, 60],  open: [] },
+  { a: [80, 0],  b: [80, 60], open: [] },
+  { a: [0, 34],  b: [80, 34], open: [[44, 52, 0, 20, "door"], [60, 68, 0, 20, "door"]] },
+  { a: [56, 34], b: [56, 60], open: [] },
+];
+const FURN = [
+  { r: "living",   n: "Sofa",          x: 22, y: 9,  w: 8,  d: 18, h: 4 },
+  { r: "living",   n: "TV unit",       x: 1,  y: 10, w: 3,  d: 16, h: 5 },
+  { r: "living",   n: "Coffee table",  x: 11, y: 13, w: 7,  d: 8,  h: 2.5 },
+  { r: "living",   n: "Kitchen counter", x: 73.5, y: 8, w: 6, d: 25.5, h: 9 },
+  { r: "living",   n: "Kitchen counter", x: 58, y: 0.5, w: 15.5, d: 6, h: 9 },
+  { r: "living",   n: "Dining table",  x: 54, y: 16, w: 10, d: 8,  h: 7.5 },
+  { r: "bedroom",  n: "Bed",           x: 2,  y: 40, w: 16, d: 19.5, h: 5 },
+  { r: "bedroom",  n: "Nightstand",    x: 19, y: 55, w: 4,  d: 4,  h: 5 },
+  { r: "bedroom",  n: "Desk",          x: 24, y: 54.5, w: 10, d: 5, h: 7.5 },
+  { r: "bedroom",  n: "Wardrobe",      x: 40, y: 54, w: 15, d: 5.5, h: 20 },
+  { r: "bathroom", n: "Shower",        x: 71, y: 50, w: 8.5, d: 9.5, h: 1 },
+  { r: "bathroom", n: "Toilet",        x: 58, y: 53, w: 4,  d: 6,  h: 4 },
+  { r: "bathroom", n: "Sink",          x: 74, y: 36, w: 5.5, d: 4, h: 8.5 },
+];
+// node: living | bedroom | door | hub ; status: have | buy | planned
+const COMP = [
+  { id: 1,  p: "LD2410C radar",           r: "living",   node: "living",  x: 0.6,  y: 17,  z: 15, st: "have",    note: "west wall, faces east: living + kitchen" },
+  { id: 2,  p: "DHT11",                   r: "living",   node: "living",  x: 30,   y: 33.4, z: 12, st: "have",   note: "inner wall, away from window and fan" },
+  { id: 3,  p: "BH1750 (0x23)",           r: "living",   node: "living",  x: 18,   y: 33.4, z: 18, st: "have",   note: "faces the south windows; serves living + kitchen" },
+  { id: 4,  p: "LED light (living)",      r: "living",   node: "living",  x: 20,   y: 17,  z: 24, st: "have",    note: "ceiling beam" },
+  { id: 5,  p: "LED light (kitchen)",     r: "living",   node: "living",  x: 65,   y: 17,  z: 24, st: "have",    note: "ceiling beam" },
+  { id: 6,  p: "Fan · SG90 servo",        r: "living",   node: "living",  x: 4,    y: 30,  z: 14, st: "have",    note: "corner bracket; INA226 0x40 in the hub" },
+  { id: 7,  p: "Buttons: living light / fan / kitchen light", r: "living", node: "living", x: 33, y: 0.6, z: 8, st: "have", note: "beside the main door" },
+  { id: 8,  p: "LD2410C radar",           r: "bedroom",  node: "bedroom", x: 0.6,  y: 47,  z: 15, st: "have",    note: "west wall, faces east" },
+  { id: 9,  p: "DHT11",                   r: "bedroom",  node: "bedroom", x: 55.4, y: 47,  z: 12, st: "have",    note: "inner wall" },
+  { id: 10, p: "TSL2561 (0x39)",          r: "bedroom",  node: "bedroom", x: 24,   y: 34.6, z: 18, st: "have",   note: "faces the north window" },
+  { id: 11, p: "LED light",               r: "bedroom",  node: "bedroom", x: 28,   y: 47,  z: 24, st: "have",    note: "ceiling beam" },
+  { id: 12, p: "Fan · SG90 servo",        r: "bedroom",  node: "bedroom", x: 52,   y: 37,  z: 14, st: "have",    note: "bracket; INA226 0x40 in the hub" },
+  { id: 13, p: "Buttons: bedroom light / fan", r: "bedroom", node: "bedroom", x: 42.5, y: 34.6, z: 8, st: "have", note: "beside the door" },
+  { id: 14, p: "FC-51 bathroom door",     r: "bathroom", node: "bedroom", x: 60.5, y: 34.6, z: 3, st: "have",    note: "door frame, looks across 8 cm" },
+  { id: 15, p: "LED light",               r: "bathroom", node: "bedroom", x: 68,   y: 47,  z: 24, st: "have",    note: "windowless" },
+  { id: 16, p: "Washer · SG90 servo",     r: "bathroom", node: "bedroom", x: 57,   y: 44,  z: 0,  st: "have",    note: "6×6×8 box; INA226 0x41 in the hub" },
+  { id: 17, p: "Button: bathroom light",  r: "living",   node: "bedroom", x: 69,   y: 33.4, z: 8, st: "have",    note: "outside the bathroom door" },
+  { id: 18, p: "Door lock · SG90",        r: "living",   node: "door",    x: 44,   y: 0.6, z: 10, st: "planned", note: "4th SG90, inside the main door" },
+  { id: 19, p: "R503 + keypad 4×4",       r: "living",   node: "door",    x: 47,   y: -0.6, z: 12, st: "planned", note: "outside, south wall" },
+  { id: 20, p: "FC-51 door open",         r: "living",   node: "door",    x: 36.6, y: 0.6, z: 3, st: "planned",  note: "door frame" },
+  { id: 21, p: "Exit button + buzzer",    r: "living",   node: "door",    x: 46,   y: 0.6, z: 8,  st: "planned", note: "inside" },
+  { id: 22, p: "Raspberry Pi 5 + 27W",    r: "hub",      node: "hub",     x: 88,   y: 38,  z: 0,  st: "have",    note: "the hub" },
+  { id: 23, p: "Router",                  r: "hub",      node: "hub",     x: 97,   y: 38,  z: 0,  st: "have",    note: "own 2.4 GHz network" },
+  { id: 24, p: "ESP32 living node",       r: "hub",      node: "living",  x: 88,   y: 30,  z: 0,  st: "have",    note: "on its expansion board" },
+  { id: 25, p: "ESP32 bedroom node",      r: "hub",      node: "bedroom", x: 97,   y: 30,  z: 0,  st: "have",    note: "on its expansion board" },
+  { id: 26, p: "ESP32 door node",         r: "hub",      node: "door",    x: 88,   y: 22,  z: 0,  st: "planned", note: "3rd ESP32" },
+  { id: 27, p: "5V 2A supply + capacitor + 3× INA226", r: "hub", node: "hub", x: 97, y: 22, z: 0, st: "have", note: "common GND" },
+];
+const NODE_LABEL = { living: "Living node (ESP32 #1)", bedroom: "Bedroom node (ESP32 #2)", door: "Door node (later)", hub: "Hub (Pi, router, power)" };
+const EXT = HUB.x + HUB.w - W + 2;   // the plan also shows the hub box east of the house
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------- plan (SVG)
+function drawPlan() {
+  const s = 9, M = 70, svg = $("plan");
+  const X = x => M + x * s, Y = y => M + (D - y) * s;   // north up
+  const Wpx = (W + EXT) * s + 2 * M, Hpx = D * s + 2 * M;
+  svg.setAttribute("viewBox", `0 0 ${Wpx} ${Hpx}`);
+  const c = { ink: css("--ink"), muted: css("--muted"), wall: css("--wall"), floor: css("--floor"), grid: css("--grid"),
+              win: css("--win"), furn: css("--furn"), paper: css("--paper"), accent: css("--accent") };
+  let o = `<rect width="${Wpx}" height="${Hpx}" fill="${c.paper}"/>`;
+  for (let x = 0; x <= W; x += 5) o += `<line x1="${X(x)}" y1="${Y(0)}" x2="${X(x)}" y2="${Y(D)}" stroke="${c.grid}" stroke-width="${x % 10 ? .5 : 1}"/>`;
+  for (let y = 0; y <= D; y += 5) o += `<line x1="${X(0)}" y1="${Y(y)}" x2="${X(W)}" y2="${Y(y)}" stroke="${c.grid}" stroke-width="${y % 10 ? .5 : 1}"/>`;
+  for (const r of ROOMS) {
+    o += `<rect x="${X(r.x)}" y="${Y(r.y + r.d)}" width="${r.w * s}" height="${r.d * s}" fill="${c.floor}" opacity=".85"/>`;
+    const cx = X(r.x + r.w / 2), cy = Y(r.y + r.d / 2);
+    o += `<text x="${cx}" y="${cy - 6}" text-anchor="middle" font-family="IBM Plex Sans Arabic, sans-serif" font-size="13" font-weight="700" fill="${c.ink}">${r.en}</text>`;
+    o += `<text x="${cx}" y="${cy + 10}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="${c.muted}">${r.w}×${r.d} cm · ${(r.w / 10).toFixed(1)}×${(r.d / 10).toFixed(1)} m</text>`;
+  }
+  for (const z of ZONES) {
+    o += `<text x="${X(z.x + z.w / 2)}" y="${Y(4)}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="${c.muted}">${z.en} zone</text>`;
+  }
+  o += `<line x1="${X(50)}" y1="${Y(0.5)}" x2="${X(50)}" y2="${Y(33.5)}" stroke="${c.muted}" stroke-width="1" stroke-dasharray="2 5"/>`;
+  // the hub box outside + the cable route under the floor
+  o += `<rect x="${X(HUB.x)}" y="${Y(HUB.y + HUB.d)}" width="${HUB.w * s}" height="${HUB.d * s}" fill="${c.floor}" stroke="${css("--hub")}" stroke-width="2"/>
+        <text x="${X(HUB.x + HUB.w / 2)}" y="${Y(HUB.y + HUB.d) - 8}" text-anchor="middle" font-family="IBM Plex Sans Arabic, sans-serif" font-size="12" font-weight="700" fill="${css("--hub")}">HUB · ${HUB.w}×${HUB.d} cm</text>
+        <path d="M ${X(80)} ${Y(31)} L ${X(HUB.x)} ${Y(31)}" stroke="${css("--hub")}" stroke-width="3" stroke-dasharray="6 3"/>
+        <text x="${X(82)}" y="${Y(31) - 6}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="${css("--hub")}">cables</text>`;
+  for (const f of FURN) o += `<rect x="${X(f.x)}" y="${Y(f.y + f.d)}" width="${f.w * s}" height="${f.d * s}" fill="none" stroke="${c.furn}" stroke-width="1.2" stroke-dasharray="${f.n === "Shower" ? "3 2" : ""}"/>`;
+  // walls with gaps for doors / windows
+  for (const w of WALLS) {
+    const horiz = w.a[1] === w.b[1], len = horiz ? w.b[0] - w.a[0] : w.b[1] - w.a[1];
+    const start = horiz ? w.a[0] : w.a[1];
+    let cut = [start];
+    const opens = w.open.slice().sort((p, q) => p[0] - q[0]);
+    for (const op of opens) if (op[4] === "door") cut.push(op[0], op[1]);
+    cut.push(start + len);
+    const sw = w.counter ? 3 : 5, col = w.counter ? c.furn : c.wall;
+    for (let i = 0; i < cut.length; i += 2) {
+      const p = cut[i], q = cut[i + 1];
+      if (q <= p) continue;
+      o += horiz ? `<line x1="${X(p)}" y1="${Y(w.a[1])}" x2="${X(q)}" y2="${Y(w.a[1])}" stroke="${col}" stroke-width="${sw}" stroke-linecap="square"/>`
+                 : `<line x1="${X(w.a[0])}" y1="${Y(p)}" x2="${X(w.a[0])}" y2="${Y(q)}" stroke="${col}" stroke-width="${sw}" stroke-linecap="square"/>`;
+    }
+    for (const op of opens) {
+      if (op[4] === "window") {
+        o += horiz ? `<line x1="${X(op[0])}" y1="${Y(w.a[1])}" x2="${X(op[1])}" y2="${Y(w.a[1])}" stroke="${c.win}" stroke-width="7"/>
+                      <line x1="${X(op[0])}" y1="${Y(w.a[1])}" x2="${X(op[1])}" y2="${Y(w.a[1])}" stroke="${c.paper}" stroke-width="2"/>`
+                   : "";
+      } else {                                            // door leaf + swing arc
+        const r = (op[1] - op[0]) * s;
+        if (horiz) {
+          const x0 = X(op[0]), y0 = Y(w.a[1]);
+          o += `<line x1="${x0}" y1="${y0}" x2="${x0}" y2="${y0 - r}" stroke="${c.muted}" stroke-width="1.2"/>
+                <path d="M ${x0} ${y0 - r} A ${r} ${r} 0 0 1 ${x0 + r} ${y0}" fill="none" stroke="${c.muted}" stroke-width=".8" stroke-dasharray="3 2"/>`;
+        } else {
+          const x0 = X(w.a[0]), y0 = Y(op[0]);
+          o += `<line x1="${x0}" y1="${y0}" x2="${x0 - r}" y2="${y0}" stroke="${c.muted}" stroke-width="1.2"/>
+                <path d="M ${x0 - r} ${y0} A ${r} ${r} 0 0 1 ${x0} ${y0 - r}" fill="none" stroke="${c.muted}" stroke-width=".8" stroke-dasharray="3 2"/>`;
+        }
+      }
+    }
+  }
+  // components
+  for (const k of COMP) {
+    const col = css("--" + k.node), x = X(k.r === "hub" ? k.x : Math.min(W + 1.5, Math.max(-1.5, k.x))), y = Y(Math.max(-1.5, k.y)), planned = k.st === "planned";
+    o += `<circle cx="${x}" cy="${y}" r="8" fill="${planned ? c.paper : col}" stroke="${col}" stroke-width="1.6" ${planned ? 'stroke-dasharray="2.5 2"' : ""}/>
+          <text x="${x}" y="${y + 3.5}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" font-weight="500" fill="${planned ? col : c.paper}">${k.id}</text>`;
+  }
+  // dimension chains
+  const dim = (x1, y1, x2, y2, label, side) => {
+    const horiz = y1 === y2, off = 14 * side;
+    let g = "";
+    if (horiz) {
+      const yy = y1 + off;
+      g += `<line x1="${x1}" y1="${yy}" x2="${x2}" y2="${yy}" stroke="${c.accent}" stroke-width="1"/>
+            <line x1="${x1}" y1="${y1 + off / 3}" x2="${x1}" y2="${yy + 4 * side}" stroke="${c.accent}" stroke-width=".8"/>
+            <line x1="${x2}" y1="${y1 + off / 3}" x2="${x2}" y2="${yy + 4 * side}" stroke="${c.accent}" stroke-width=".8"/>
+            <line x1="${x1 - 3}" y1="${yy + 3}" x2="${x1 + 3}" y2="${yy - 3}" stroke="${c.accent}" stroke-width="1.4"/>
+            <line x1="${x2 - 3}" y1="${yy + 3}" x2="${x2 + 3}" y2="${yy - 3}" stroke="${c.accent}" stroke-width="1.4"/>
+            <text x="${(x1 + x2) / 2}" y="${yy - 4 * (side > 0 ? -2.6 : 1)}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="${c.accent}">${label}</text>`;
+    } else {
+      const xx = x1 + off;
+      g += `<line x1="${xx}" y1="${y1}" x2="${xx}" y2="${y2}" stroke="${c.accent}" stroke-width="1"/>
+            <line x1="${x1 + off / 3}" y1="${y1}" x2="${xx + 4 * side}" y2="${y1}" stroke="${c.accent}" stroke-width=".8"/>
+            <line x1="${x1 + off / 3}" y1="${y2}" x2="${xx + 4 * side}" y2="${y2}" stroke="${c.accent}" stroke-width=".8"/>
+            <line x1="${xx - 3}" y1="${y1 + 3}" x2="${xx + 3}" y2="${y1 - 3}" stroke="${c.accent}" stroke-width="1.4"/>
+            <line x1="${xx - 3}" y1="${y2 + 3}" x2="${xx + 3}" y2="${y2 - 3}" stroke="${c.accent}" stroke-width="1.4"/>
+            <text x="${xx + (side > 0 ? 6 : -6)}" y="${(y1 + y2) / 2 + 3}" text-anchor="${side > 0 ? "start" : "end"}" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="${c.accent}">${label}</text>`;
+    }
+    return g;
+  };
+  // south: total 80; north: 56 | 24; west: 34 | 26, total 60; east: 34 | 26
+  o += dim(X(0), Y(0), X(36), Y(0), "36", 1) + dim(X(36), Y(0), X(44), Y(0), "8", 1) + dim(X(44), Y(0), X(80), Y(0), "36", 1);
+  o += dim(X(0), Y(0) + 22, X(80), Y(0) + 22, "80 cm", 1);
+  o += dim(X(0), Y(60), X(56), Y(60), "56", -1) + dim(X(56), Y(60), X(80), Y(60), "24", -1);
+  o += dim(X(0), Y(0), X(0), Y(34), "34", -1) + dim(X(0), Y(34), X(0), Y(60), "26", -1);
+  o += dim(X(0) - 26, Y(0), X(0) - 26, Y(60), "60 cm", -1);
+  // north arrow
+  o += `<g transform="translate(${Wpx - 30},${Hpx - 34})"><path d="M0 -14 L6 6 L0 2 L-6 6 Z" fill="${c.ink}"/><text y="18" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="${c.ink}">N</text></g>`;
+  o += `<text x="${M}" y="${Hpx - 12}" font-family="IBM Plex Mono, monospace" font-size="10" fill="${c.muted}">Scale 1:10 · cm · grid 5 cm</text>`;
+  svg.innerHTML = o;
+  $("legend").innerHTML = Object.entries(NODE_LABEL).map(([k, v]) => `<span><i style="background:var(--${k})"></i>${v}</span>`).join("") +
+    `<span><i style="border:1.5px dashed var(--door);background:transparent"></i>متقطّع = لاحقاً</span>
+     <span><i class="sq" style="background:var(--win)"></i>نافذة</span>`;
+}
+
+// ---------------------------------------------------------------- tables
+function tables() {
+  const node = k => `<span class="dot" style="background:var(--${k})"></span>${NODE_LABEL[k]}`;
+  const st = s => `<span class="pill ${s}">${{ have: "موجود", buy: "للشراء", planned: "لاحقاً" }[s]}</span>`;
+  const count = r => COMP.filter(k => k.r === r.id).length;
+  $("t-rooms").innerHTML = `<thead><tr><th>الغرفة</th><th>المجسّم (cm)</th><th>الحقيقة (m)</th><th>المساحة (m²)</th><th>العقدة</th><th>قطع</th></tr></thead><tbody>` +
+    ROOMS.concat([{ id: "hub", ar: "الـ Hub (خارج البيت)", en: "Hub box", w: HUB.w, d: HUB.d, hub: true }]).map(r => r.hub ? `<tr><td><b>${r.ar}</b> <span style="color:var(--muted)">${r.en}</span></td><td class="n">${r.w} × ${r.d} × ${HUB.h}</td><td class="n">—</td><td class="n">—</td><td>${node("hub")}</td><td class="n">${COMP.filter(k => k.r === "hub").length}</td></tr>` : `<tr><td><b>${r.ar}</b> <span style="color:var(--muted)">${r.en}</span></td><td class="n">${r.w} × ${r.d} × ${H}</td><td class="n">${(r.w / 10).toFixed(1)} × ${(r.d / 10).toFixed(1)} × 2.5</td><td class="n">${(r.w * r.d / 100).toFixed(1)}</td><td>${{ living: node("living"), bedroom: node("bedroom"), bathroom: node("bedroom") }[r.id]}</td><td class="n">${count(r)}</td></tr>`).join("") + `</tbody>`;
+  $("t-comp").innerHTML = `<thead><tr><th>#</th><th>القطعة</th><th>الغرفة</th><th>العقدة</th><th>x, y, z (cm)</th><th>الحالة</th><th>ملاحظة</th></tr></thead><tbody>` +
+    COMP.map(k => `<tr><td class="n">${k.id}</td><td class="mono" style="text-align:left">${k.p}</td><td>${k.r === "hub" ? "الـ Hub" : ROOMS.find(r => r.id === k.r).ar}</td><td>${node(k.node)}</td><td class="n">${k.x}, ${k.y}, ${k.z < 0 ? "under floor" : k.z}</td><td>${st(k.st)}</td><td class="mono" style="text-align:left;color:var(--muted)">${k.note}</td></tr>`).join("") + `</tbody>`;
+  const cut = [
+    ["Base + raised floor", 2, "80 × 60", "طبقتان بينهما فواصل 3 سم؛ فتحة 4 × 2 سم في الجدار الشرقي للأسلاك"],
+    ["South outer wall", 1, "80 × 25", "نافذتا 20×10 و14×10 على ارتفاع 8 سم، وباب رئيسي 8×20 عند x = 36"],
+    ["North outer wall", 1, "80 × 25", "نافذة 20×10 عند x = 14"],
+    ["West / east outer wall", 2, "59 × 25", ""],
+    ["Living | bedroom + bath (y = 34)", 1, "79 × 25", "بابان 8×20 عند x = 44 و x = 60"],
+    ["Bedroom | bath (x = 56)", 1, "25.5 × 25", ""],
+    ["Ceiling beams (lights)", 3, "60 × 2", "شرائح فوق المساحات لتعليق الـ LED"],
+    ["Spacers (raised floor)", 12, "3 × 3 × 3", "مكعبات فوم أو خشب"],
+    ["Hub box", 1, "18 × 26 × 10", "فوم أو أكريليك شفاف ليرى الجمهور الداخل؛ فتحات تهوية للـ Pi"],
+  ];
+  $("t-cut").innerHTML = `<thead><tr><th>القطعة</th><th>العدد</th><th>القياس (cm)</th><th>ملاحظة</th></tr></thead><tbody>` +
+    cut.map(r => `<tr><td class="mono" style="text-align:left">${r[0]}</td><td class="n">${r[1]}</td><td class="n">${r[2]}</td><td>${r[3]}</td></tr>`).join("") +
+    `<tr><td colspan="4" style="color:var(--muted)">المجموع التقريبي: لوحان فوم <span class="num">70 × 100</span> أو أربعة <span class="num">50 × 70</span>، مع هامش للأخطاء.</td></tr></tbody>`;
+}
+
+// ---------------------------------------------------------------- 3D
+let scene, camera, renderer, labels, controls, groups = {}, pickables = [];
+const on = id => $(id).getAttribute("aria-pressed") === "true";
+function build3D() {
+  const el = $("view3d");
+  if (!window.THREE) { el.insertAdjacentHTML("afterbegin", '<p style="padding:20px;color:var(--muted)">تعذّر تحميل مكتبة الرسم الثلاثي الأبعاد. المسقط والجداول أدناه كاملة.</p>'); return; }
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, el.clientWidth / el.clientHeight, 0.5, 2000);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  el.appendChild(renderer.domElement);
+  labels = new THREE.CSS2DRenderer();
+  labels.setSize(el.clientWidth, el.clientHeight);
+  Object.assign(labels.domElement.style, { position: "absolute", top: "0", left: "0", pointerEvents: "none" });
+  el.appendChild(labels.domElement);
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 1.9;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.8));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.55); sun.position.set(-40, 90, 60); scene.add(sun);
+  setView("iso");
+  paint();
+  // tap / click a component: its name, node and place
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  let down = null;
+  renderer.domElement.addEventListener("pointerdown", e => { down = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener("pointerup", e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;   // a drag, not a tap
+    const r = renderer.domElement.getBoundingClientRect();
+    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects(pickables.filter(o => o.visible && o.parent && o.parent.visible), true)[0];
+    let o = hit && hit.object; while (o && !o.userData.comp) o = o.parent;
+    showInfo(o ? o.userData.comp : null);
+  });
+  addEventListener("resize", () => {
+    camera.aspect = el.clientWidth / el.clientHeight; camera.updateProjectionMatrix();
+    renderer.setSize(el.clientWidth, el.clientHeight); labels.setSize(el.clientWidth, el.clientHeight);
+  });
+  (function loop() { controls.update(); renderer.render(scene, camera); labels.render(scene, camera); requestAnimationFrame(loop); })();
+}
+function showInfo(k) {
+  const box = $("info3d");
+  if (!k) { box.hidden = true; return; }
+  const room = k.r === "hub" ? "الـ Hub" : ROOMS.find(r => r.id === k.r).ar;
+  box.innerHTML = `<b class="num">#${k.id} · ${k.p}</b><span>${room} · ${NODE_LABEL[k.node]}</span>
+    <span class="num">x ${k.x} · y ${k.y} · z ${k.z} cm</span><span class="num" style="color:var(--muted)">${k.note}</span>
+    ${k.st === "planned" ? '<span class="pill planned">لاحقاً</span>' : ""}`;
+  box.hidden = false;
+}
+
+// ---- building blocks. plan (x, y, z) -> three (x, z, -y); x, y, z = the lower south-west corner
+const MATS = {};
+const mat = (color, op = 1, emissive) => {
+  const key = color + "|" + op + "|" + (emissive || "");
+  if (!MATS[key]) MATS[key] = new THREE.MeshLambertMaterial({ color, transparent: op < 1, opacity: op, emissive: emissive || 0x000000 });
+  return MATS[key];
+};
+const box = (x, y, z, w, d, h, color, op = 1, emissive) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, op, emissive));
+  m.position.set(x + w / 2, z + h / 2, -(y + d / 2));
+  return m;
+};
+const cyl = (cx, cy, z, r, h, color, op = 1, axis = "z", emissive) => {        // axis: plan axis of the cylinder
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 24), mat(color, op, emissive));
+  if (axis === "z") m.position.set(cx, z + h / 2, -cy);
+  else if (axis === "x") { m.rotation.z = Math.PI / 2; m.position.set(cx + h / 2, z, -cy); }
+  else { m.rotation.x = Math.PI / 2; m.position.set(cx, z, -(cy + h / 2)); }
+  return m;
+};
+const label = (text, x, y, z, cls = "") => {
+  const div = document.createElement("div"); div.className = "lbl " + cls; div.textContent = text;
+  const o = new THREE.CSS2DObject(div); o.position.set(x, z, -y); return o;
+};
+const group = (...parts) => { const g = new THREE.Group(); parts.forEach(p => g.add(p)); return g; };
+
+// ---- furniture with recognisable shapes (cm, scale 1:10)
+function furniture(f, C) {
+  const { x, y, w, d, h } = f, wood = C.wood, soft = C.soft, white = C.white, dark = C.dark;
+  switch (f.n) {
+    case "Bed": return group(box(x, y, 0, w, d, 2.5, wood), box(x + 0.3, y + 0.3, 2.5, w - 0.6, d - 0.6, 2, white),
+      box(x + 0.3, y + 0.3, 4.4, w - 0.6, d * 0.62, 0.5, soft),
+      box(x + 1.5, y + d - 4.2, 4.5, w / 2 - 2, 3, 1.4, white), box(x + w / 2 + 0.5, y + d - 4.2, 4.5, w / 2 - 2, 3, 1.4, white),
+      box(x, y + d - 0.8, 0, w, 0.8, 9, wood));
+    case "Nightstand": return group(box(x, y, 0, w, d, h, wood), cyl(x + w / 2, y + d / 2, h, 0.6, 2.5, C.metal), cyl(x + w / 2, y + d / 2, h + 2.5, 1.2, 1.2, C.warm, 1, "z", C.warmGlow));
+    case "Desk": return group(box(x, y, 7, w, d, 0.5, wood), box(x, y, 0, 0.6, d, 7, wood), box(x + w - 0.6, y, 0, 0.6, d, 7, wood),
+      box(x + w / 2 - 2, y - 4, 0, 4, 4, 4.5, dark), box(x + w / 2 - 2, y - 4.6, 4.5, 4, 0.6, 4, dark),
+      box(x + w / 2 - 2.5, y + d - 2.5, 7.5, 5, 0.4, 3.2, dark));
+    case "Wardrobe": return group(box(x, y, 0, w, d, h, wood), box(x + w / 2 - 0.05, y - 0.05, 0.5, 0.1, 0.1, h - 1, dark),
+      box(x + w / 2 - 1.2, y - 0.25, h / 2, 0.3, 0.3, 2, C.metal), box(x + w / 2 + 0.9, y - 0.25, h / 2, 0.3, 0.3, 2, C.metal));
+    case "Sofa": return group(box(x, y, 0, w, d, 2.5, soft), box(x + w - 2.5, y, 2.5, 2.5, d, 4, soft),
+      box(x, y, 2.5, w, 2, 2.5, soft), box(x, y + d - 2, 2.5, w, 2, 2.5, soft),
+      box(x + 0.5, y + 2.2, 2.5, w - 3.2, d / 2 - 2.4, 1, C.soft2), box(x + 0.5, y + d / 2 + 0.2, 2.5, w - 3.2, d / 2 - 2.4, 1, C.soft2));
+    case "TV unit": return group(box(x, y, 0, w, d, h, wood), box(x + 0.8, y + 1.5, h, 0.4, d - 3, 8.5, dark), box(x + 1, y + 2, h + 0.5, 0.1, d - 4, 7.5, C.screen, 1, C.screenGlow));
+    case "Coffee table": return group(box(x, y, h - 0.5, w, d, 0.5, wood), box(x + 0.3, y + 0.3, 0, 0.6, 0.6, h - 0.5, wood),
+      box(x + w - 0.9, y + 0.3, 0, 0.6, 0.6, h - 0.5, wood), box(x + 0.3, y + d - 0.9, 0, 0.6, 0.6, h - 0.5, wood), box(x + w - 0.9, y + d - 0.9, 0, 0.6, 0.6, h - 0.5, wood));
+    case "Kitchen counter": {
+      const g = group(box(x, y, 0, w, d, h - 0.6, white), box(x, y, h - 0.6, w, d, 0.6, C.stone));
+      if (d > w) {      // the east run: sink + upper cabinets on the east wall
+        g.add(box(x + 1, y + 6, h - 0.5, w - 2, 5, 0.6, C.metal), cyl(x + w - 1.2, y + 8.5, h, 0.25, 2, C.metal));
+        g.add(box(x + w - 3.5, y + 2, 16, 3.5, d - 4, 6, white));
+      } else {          // the south run: the stove
+        g.add(box(x + 3, y + 0.8, h - 0.05, 7, 4.4, 0.2, dark),
+          cyl(x + 4.8, y + 2, h + 0.1, 1, 0.2, C.metal), cyl(x + 8.2, y + 2, h + 0.1, 1, 0.2, C.metal),
+          cyl(x + 4.8, y + 4.2, h + 0.1, 0.8, 0.2, C.metal), cyl(x + 8.2, y + 4.2, h + 0.1, 0.8, 0.2, C.metal));
+      }
+      return g;
+    }
+    case "Dining table": {
+      const g = group(box(x, y, h - 0.5, w, d, 0.5, wood), box(x + w / 2 - 0.4, y + d / 2 - 0.4, 0, 0.8, 0.8, h - 0.5, wood));
+      for (const [cx, cy] of [[x + 2, y - 3.5], [x + w - 6, y - 3.5], [x + 2, y + d + 0.5], [x + w - 6, y + d + 0.5]]) {
+        g.add(box(cx, cy, 0, 4, 3, 4.5, dark), box(cx, cy + (cy < y ? 0 : 2.4), 4.5, 4, 0.6, 4, dark));
+      }
+      return g;
+    }
+    case "Shower": return group(box(x, y, 0, w, d, 0.8, white), box(x, y, 0.8, 0.2, d, 19, C.glass, 0.3),
+      cyl(x + w - 1, y + d - 1, 18, 1, 0.3, C.metal), box(x + w - 1.2, y + d - 0.6, 0.8, 0.3, 0.3, 17.5, C.metal));
+    case "Toilet": return group(cyl(x + w / 2, y + 2.4, 0, 1.6, 4, white), box(x + 0.3, y + d - 1.6, 0, w - 0.6, 1.6, 7, white));
+    case "Sink": return group(box(x + w / 2 - 0.8, y + d - 1.6, 0, 1.6, 1.6, h - 1.5, white), box(x, y, h - 1.5, w, d, 1.5, white),
+      box(x + 0.8, y + 0.8, h - 0.2, w - 1.6, d - 1.6, 0.3, C.glass), box(x + 0.5, y + d - 0.2, h + 1, w - 1, 0.2, 6, C.glass, 0.5));
+    default: return box(x, y, 0, w, d, h, C.furn);
+  }
+}
+
+// ---- components shaped like the parts (kind from the part name)
+function part(k, C, hw) {
+  const nodeCol = C[k.node], ghost = k.st === "planned" ? 0.45 : 1;
+  const x = k.x, y = k.y, z = k.r === "hub" ? -2.7 : Math.min(k.z, hw - 1);
+  const p = k.p.toLowerCase();
+  let g;
+  if (k.r === "hub") {
+    if (p.includes("raspberry")) g = group(box(x - 4.3, y - 2.8, z, 8.6, 5.6, 0.2, C.pcb, ghost), box(x - 4, y - 2.5, z + 0.2, 7.6, 5, 1.8, C.caseRed, ghost),
+      box(x - 1, y - 2.5, z + 2, 2.4, 2.4, 0.2, C.white, ghost));
+    else if (p.includes("router")) g = group(box(x - 5, y - 3.5, z, 10, 7, 2.2, C.white, ghost),
+      box(x - 4, y + 3, z + 2.2, 0.4, 0.4, 7, C.dark, ghost), box(x + 3.6, y + 3, z + 2.2, 0.4, 0.4, 7, C.dark, ghost));
+    else if (p.includes("esp32")) g = group(box(x - 4, y - 3, z, 8, 6, 0.3, C.purple, ghost), box(x - 2.6, y - 1.4, z + 0.3, 5.2, 2.8, 0.6, C.dark, ghost),
+      box(x - 1.2, y - 1, z + 0.9, 2, 1.8, 0.3, C.metal, ghost));
+    else g = group(box(x - 4, y - 2.5, z, 8, 5, 3, C.dark, ghost), cyl(x + 2.5, y + 3.3, z, 0.7, 2.4, C.capBlue, ghost));
+  } else if (p.includes("ld2410")) {
+    g = group(box(x - 1.1, y - 0.8, z - 0.8, 2.2, 1.6, 1.6, C.pcbGreen, ghost), box(x - 0.6, y - 0.5, z - 0.5, 1.2, 1, 1, C.gold, ghost));
+  } else if (p.includes("bh1750") || p.includes("tsl2561")) {
+    g = group(box(x - 0.9, y - 0.9, z - 0.6, 1.8, 1.8, 1.2, C.purple, ghost), cyl(x, y, z + 0.6, 0.35, 0.2, C.white, ghost));
+  } else if (p.includes("dht11")) {
+    g = group(box(x - 0.8, y - 0.6, z - 1, 1.6, 1.2, 2, C.capBlue, ghost));
+  } else if (p.includes("led light")) {
+    g = group(cyl(x, y, z - 0.5, 0.15, 1, C.dark, ghost), new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), mat(C.warm, ghost, C.warmGlow)));
+    g.children[1].position.set(x, z - 1.2, -y);
+  } else if (p.includes("servo")) {
+    g = group(box(x - 1.2, y - 0.6, z - 1.1, 2.4, 1.2, 2.2, C.capBlue, ghost));
+    if (p.includes("fan")) g.add(cyl(x, y, z + 1.1, 0.25, 0.8, C.white, ghost), cyl(x, y, z + 1.9, 2.6, 0.15, C.white, 0.85));
+    if (p.includes("washer")) { g.children[0].position.y = 1.1; g.add(box(x - 3, y - 3, 0, 6, 6, 8, C.white, ghost), cyl(x, y - 3, 4, 2, 0.3, C.glass, 0.7, "y")); }
+    if (p.includes("lock")) g.add(box(x - 0.3, y - 2, z, 0.6, 2, 0.4, C.metal, ghost));
+  } else if (p.includes("fc-51")) {
+    g = group(box(x - 0.7, y - 0.5, z - 0.4, 1.4, 1, 0.8, C.pcbBlue, ghost), cyl(x - 0.3, y + 0.5, z, 0.2, 0.4, C.white, ghost, "y"), cyl(x + 0.3, y + 0.5, z, 0.2, 0.4, C.dark, ghost, "y"));
+  } else if (p.includes("button")) {
+    g = group(box(x - 1.2, y - 0.3, z - 1.2, 2.4, 0.6, 2.4, C.white, ghost), cyl(x - 0.5, y, z, 0.35, 0.6, nodeCol, ghost, "y"), cyl(x + 0.5, y, z, 0.35, 0.6, nodeCol, ghost, "y"));
+  } else if (p.includes("r503")) {
+    g = group(box(x - 1.5, y - 0.4, z - 2.5, 3, 0.4, 5, C.dark, ghost), cyl(x, y - 0.5, z + 1.2, 0.6, 0.2, C.capBlue, ghost, "y"));
+  } else {
+    g = group(box(x - 1, y - 1, z - 1, 2, 2, 2, nodeCol, ghost));
+  }
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.9, 0.12, 6, 24), mat(nodeCol, 0.9));   // node colour mark
+  ring.rotation.x = Math.PI / 2; ring.position.set(x, (k.r === "hub" ? z : Math.max(0.15, z - 2.2)), -y);
+  g.add(ring);
+  g.userData.comp = k;
+  return g;
+}
+
+// ---- wires: from the part down its 1 cm hole, under the floor to the node's trunk, out of the east wall to the hub
+const FLOOR_Z = -1.6;
+function wirePath(k, hw, lane) {
+  const pts = [], P = (x, y, z) => pts.push(new THREE.Vector3(x, z, -y));
+  let x = k.x, y = k.y, z = Math.min(k.z, hw - 1);
+  P(x, y, z);
+  if (k.z >= 20) {                         // ceiling light: along the beam to the nearest wall, then down the wall
+    const room = ROOMS.find(r => r.id === k.r) || ROOMS[0];
+    const cand = [[room.x + 0.6, y], [room.x + room.w - 0.6, y], [x, room.y + 0.6], [x, room.y + room.d - 0.6]];
+    [x, y] = cand.sort((a, b) => Math.hypot(a[0] - k.x, a[1] - k.y) - Math.hypot(b[0] - k.x, b[1] - k.y))[0];
+    P(x, y, z);
+  }
+  P(x, y, 0); P(x, y, FLOOR_Z);
+  const trunkY = (k.y > 34 ? 37 : 30.5) + lane * 0.22;
+  const exitY = 31 + lane * 0.12;
+  P(x, trunkY, FLOOR_Z); P(78.5 - lane * 0.1, trunkY, FLOOR_Z); P(78.5 - lane * 0.1, exitY, FLOOR_Z);
+  const target = COMP.find(c => c.r === "hub" && c.node === k.node && c.p.toLowerCase().includes("esp32"));
+  P(HUB.x + 1, exitY, FLOOR_Z);
+  if (target) { P(target.x, exitY, FLOOR_Z); P(target.x, target.y + 3, -2.2); }
+  return pts;
+}
+function wire(pts, color, op) {
+  const path = new THREE.CurvePath();
+  for (let i = 1; i < pts.length; i++) if (pts[i].distanceTo(pts[i - 1]) > 0.01) path.add(new THREE.LineCurve3(pts[i - 1], pts[i]));
+  return new THREE.Mesh(new THREE.TubeGeometry(path, Math.max(8, path.curves.length * 12), 0.16, 6, false), mat(color, op));
+}
+
+function paint() {
+  for (const g of Object.values(groups)) { g.traverse(o => { if (o.element) o.element.remove(); }); scene.remove(g); }
+  groups = { base: new THREE.Group(), walls: new THREE.Group(), furn: new THREE.Group(), comp: new THREE.Group(), wires: new THREE.Group(), lbl: new THREE.Group() };
+  pickables = [];
+  const c3 = n => new THREE.Color(css(n));
+  const C = {
+    living: c3("--living"), bedroom: c3("--bedroom"), door: c3("--door"), hub: c3("--hub"), furn: c3("--furn"),
+    wood: new THREE.Color(0xb98a5e), soft: new THREE.Color(0x5f7fa6), soft2: new THREE.Color(0x7a96bb), white: new THREE.Color(0xf2f2ee),
+    dark: new THREE.Color(0x2c2f36), metal: new THREE.Color(0xb7bcc4), stone: new THREE.Color(0x8d8f93), glass: new THREE.Color(0x9fd3f0),
+    warm: new THREE.Color(0xfff1c4), warmGlow: new THREE.Color(0xc9a24a), screen: new THREE.Color(0x0e2238), screenGlow: new THREE.Color(0x0a2f55),
+    pcb: new THREE.Color(0x1d6b3a), pcbGreen: new THREE.Color(0x2f7d46), pcbBlue: new THREE.Color(0x24548f), purple: new THREE.Color(0x6a3fa0),
+    gold: new THREE.Color(0xd6b25e), capBlue: new THREE.Color(0x3a6fd8), caseRed: new THREE.Color(0xd23b4b),
+  };
+  scene.background = c3("--paper");
+  const hw = on("b-low") ? HLOW : H, floorOp = on("b-floor") ? 0.18 : 1;
+  groups.base.add(box(-1, -1, -3.5, W + 2, D + 2, 0.5, c3("--line")));                     // base board
+  groups.base.add(box(-1, -1, -0.5, W + 2, D + 2, 0.5, c3("--floor"), floorOp));           // raised floor
+  for (const [sx, sy] of [[0, 0], [38, 0], [78, 0], [0, 29], [38, 29], [78, 29], [0, 58], [38, 58], [78, 58]])
+    groups.base.add(box(sx, sy, -3, 2, 2, 2.5, c3("--line"), on("b-floor") ? 1 : 0));        // spacers (seen through)
+  const grid = new THREE.GridHelper(220, 44, c3("--grid"), c3("--grid")); grid.position.set((W + EXT) / 2, -3.6, -D / 2); groups.base.add(grid);
+  for (const w of WALLS) {
+    const horiz = w.a[1] === w.b[1], start = horiz ? w.a[0] : w.a[1], end = horiz ? w.b[0] : w.b[1];
+    const piece = (p, q, z0, z1) => {
+      if (q - p <= 0 || z1 - z0 <= 0) return;
+      groups.walls.add(horiz ? box(p, w.a[1] - T / 2, z0, q - p, T, z1 - z0, c3("--wall"), 0.9)
+                             : box(w.a[0] - T / 2, p, z0, T, q - p, z1 - z0, c3("--wall"), 0.9));
+    };
+    let pos = start;
+    for (const op of w.open.slice().sort((p, q) => p[0] - q[0])) {
+      piece(pos, op[0], 0, hw); piece(op[0], op[1], 0, Math.min(op[2], hw)); piece(op[0], op[1], Math.min(op[3], hw), hw);
+      if (op[4] === "window" && op[2] < hw) {
+        const top = Math.min(op[3], hw);
+        groups.walls.add(horiz ? box(op[0], w.a[1] - 0.1, op[2], op[1] - op[0], 0.2, top - op[2], c3("--win"), 0.35)
+                               : box(w.a[0] - 0.1, op[0], op[2], 0.2, op[1] - op[0], top - op[2], c3("--win"), 0.35));
+      }
+      pos = op[1];
+    }
+    piece(pos, end, 0, hw);
+  }
+  // ceiling beams that carry the lights
+  if (!on("b-low")) for (const [bx, by, bw] of [[0, 16.2, 50], [50, 16.2, 30], [0, 46.2, 56], [56, 46.2, 24]]) groups.walls.add(box(bx, by, H - 0.6, bw, 1.6, 0.6, c3("--wall"), 0.6));
+  for (const f of FURN) groups.furn.add(furniture(f, C));
+  // the hub box (clear acrylic) + the cable exit in the east wall
+  groups.walls.add(box(HUB.x, HUB.y, -3.5, HUB.w, HUB.d, 0.4, c3("--hub")));
+  groups.walls.add(box(HUB.x, HUB.y, -3.1, HUB.w, HUB.d, HUB.h, C.glass, 0.18));
+  groups.walls.add(box(80, 30.4, -2.6, HUB.x - 80, 2.2, 2, c3("--hub"), 0.35));
+  groups.lbl.add(label("HUB", HUB.x + HUB.w / 2, HUB.y + HUB.d / 2, HUB.h, "room"));
+  for (const k of COMP) {
+    const g = part(k, C, hw);
+    groups.comp.add(g); pickables.push(g);
+    groups.lbl.add(label(String(k.id), k.x, k.y, (k.r === "hub" ? 3 : Math.min(k.z, hw - 1) + 2.8)));
+  }
+  let lane = 0;
+  for (const k of COMP) {
+    if (k.r === "hub") continue;
+    groups.wires.add(wire(wirePath(k, hw, lane % 9), C[k.node], k.st === "planned" ? 0.5 : 1));
+    lane++;
+  }
+  for (const r of ROOMS) groups.lbl.add(label(r.en, r.x + r.w / 2, r.y + r.d / 2, 0.5, "room"));
+  groups.furn.visible = on("b-furn");
+  groups.comp.visible = on("b-comp");
+  groups.wires.visible = on("b-wire");
+  groups.lbl.visible = on("b-lbl");
+  groups.lbl.traverse(o => { if (o.element) o.element.style.display = groups.lbl.visible ? "" : "none"; });
+  Object.values(groups).forEach(g => scene.add(g));
+}
+const VIEWS = {
+  iso:     { pos: [-35, 75, 55],  at: [(W + EXT) / 2, 0, -D / 2] },
+  top:     { pos: [(W + EXT) / 2, 150, -D / 2 + 0.01], at: [(W + EXT) / 2, 0, -D / 2] },
+  bedroom: { pos: [-14, 32, -12], at: [26, 4, -48] },
+  kitchen: { pos: [36, 30, 22],   at: [66, 4, -12] },
+  wires:   { pos: [118, 26, 30],  at: [62, -2, -30] },
+};
+function setView(v) {
+  if (!camera) return;
+  const s = VIEWS[v];
+  camera.position.set(...s.pos); controls.target.set(...s.at); controls.update();
+  if (v === "wires") {                       // show what this view is for
+    for (const id of ["b-wire", "b-floor"]) $(id).setAttribute("aria-pressed", "true");
+    paint();
+  }
+}
+
+// ---------------------------------------------------------------- wiring of the page
+for (const id of ["b-furn", "b-comp", "b-wire", "b-floor", "b-lbl", "b-low"]) {
+  $(id).addEventListener("click", e => {
+    const b = e.currentTarget; b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+    if (scene) paint();
+  });
+}
+for (const v of Object.keys(VIEWS)) $("v-" + v).addEventListener("click", () => setView(v));
+const redraw = () => { drawPlan(); if (scene) paint(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+drawPlan(); tables(); build3D();
+</script>
+
+</body>
+</html>

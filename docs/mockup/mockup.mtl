@@ -1,0 +1,32 @@
+# materials for mockup.obj
+newmtl base
+Kd 0.75 0.78 0.84
+newmtl floor
+Kd 0.93 0.94 0.96
+newmtl wall
+Kd 0.88 0.90 0.94
+newmtl glass
+Kd 0.62 0.83 0.94
+d 0.35
+newmtl furniture
+Kd 0.73 0.56 0.40
+newmtl living
+Kd 0.06 0.55 0.55
+newmtl bedroom
+Kd 0.77 0.48 0.07
+newmtl door
+Kd 0.76 0.25 0.23
+newmtl hub
+Kd 0.42 0.31 0.73
+newmtl living_planned
+Kd 0.06 0.55 0.55
+d 0.5
+newmtl bedroom_planned
+Kd 0.77 0.48 0.07
+d 0.5
+newmtl door_planned
+Kd 0.76 0.25 0.23
+d 0.5
+newmtl hub_planned
+Kd 0.42 0.31 0.73
+d 0.5
