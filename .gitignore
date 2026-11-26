@@ -38,3 +38,9 @@ pi/twin/reports/
 *.db-shm
 *.patch
 pi/.flash/
+
+# Blender working files (share the .blend on Drive; only renders go in git)
+*.blend
+*.blend1
+docs/mockup/renders/*_frames/
+docs/mockup/renders/*.mp4

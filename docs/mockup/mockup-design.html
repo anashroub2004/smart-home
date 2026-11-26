@@ -572,7 +572,7 @@ function wirePath(k, hw, lane) {
   P(x, y, z);
   if (k.z >= 20) {                         // ceiling light: along the beam to the nearest wall, then down the wall
     const room = ROOMS.find(r => r.id === k.r) || ROOMS[0];
-    const cand = [[room.x + 0.6, y], [room.x + room.w - 0.6, y], [x, room.y + 0.6], [x, room.y + room.d - 0.6]];
+    const cand = [[room.x + 0.6, y], [room.x + room.w - 0.6, y]];   // the beams run east-west: only their end walls
     [x, y] = cand.sort((a, b) => Math.hypot(a[0] - k.x, a[1] - k.y) - Math.hypot(b[0] - k.x, b[1] - k.y))[0];
     P(x, y, z);
   }
